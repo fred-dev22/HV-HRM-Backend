@@ -1,0 +1,1143 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+}
+
+datasource db {
+  provider = "sqlserver"
+}
+
+// =========================================================================
+// Productive 247 HRM — HV — Data Model v2.0
+// Module Administration
+//
+// NOTE: SQL Server has no native enum type, and Prisma's sqlserver connector
+// rejects `enum` blocks entirely. All "enum" fields below are emulated as
+// String @db.NVarChar(n) with a comment listing the allowed values, exactly
+// as specified in the source data model document.
+//
+// NOTE: every FK relation below sets onDelete: NoAction, onUpdate: NoAction.
+// This is required by SQL Server / Prisma: Employee is referenced from
+// almost every table (business FKs + CreatedBy/ModifiedBy audit FKs), which
+// creates multiple cascade paths SQL Server refuses to create with default
+// referential actions. Cascade/set-null behavior is handled by the
+// application layer instead.
+// =========================================================================
+
+// =========================================================================
+// STRUCTURE & ORGANISATION
+// =========================================================================
+
+/// Unite organisationnelle de l'entreprise : Direction, Departement ou Service.
+/// Auto-referencee via ParentId pour modeliser la hierarchie.
+model OrganizationUnit {
+  Id              String  @id @default(uuid()) @db.UniqueIdentifier
+  Code            String  @unique @db.NVarChar(20)
+  Name            String  @db.NVarChar(150)
+  // Type: Direction | Department | Service
+  Type            String  @db.NVarChar(20)
+  // Absent du modele PDF — identifiant legal/fiscal local (RCS, NIF...),
+  // ajoute a la demande cote UI (ecrans de creation/edition d'entite).
+  LegalIdentifier String? @db.NVarChar(50)
+  ParentId        String? @db.UniqueIdentifier
+  // Responsable designe de cette unite. Nullable en pratique : une unite peut
+  // exister avant qu'un employe lui soit rattache (bootstrap / transition).
+  ManagerId       String? @db.UniqueIdentifier
+  Address         String? @db.NVarChar(255)
+  Phone           String? @db.NVarChar(30)
+  Email           String? @db.NVarChar(150)
+  // Status: Draft | PendingApproval | Active | Inactive
+  Status          String  @db.NVarChar(20)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  // Suppression (Lot I) — distincte de Status='Inactive' (desactivation,
+  // reversible depuis l'app). IsDeleted cache definitivement la ligne de
+  // toute l'UI ; seul un dev peut la repasser a false directement en base.
+  // Pas de relation Prisma vers Employee pour DeletedBy (juste l'Id brut) :
+  // ce champ n'est jamais affiche dans l'app, seulement consulte par un dev.
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  parent   OrganizationUnit?  @relation("OrganizationUnitHierarchy", fields: [ParentId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  children OrganizationUnit[] @relation("OrganizationUnitHierarchy")
+
+  manager Employee? @relation("OrganizationUnitManager", fields: [ManagerId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("OrganizationUnitCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("OrganizationUnitModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  positions     Position[]
+  employees     Employee[]     @relation("EmployeeOrganizationUnit")
+  approvalPools ApprovalPool[]
+  holidays      Holiday[]
+  leaveTypes    LeaveType[]
+
+  @@index([ParentId])
+  @@index([ManagerId])
+}
+
+/// Referentiel abstrait des metiers de l'entreprise. Decrit une fonction
+/// independamment de toute affectation. Un meme Job peut donner lieu a
+/// plusieurs Positions dans des entites differentes.
+model Job {
+  Id          String  @id @default(uuid()) @db.UniqueIdentifier
+  Code        String  @unique @db.NVarChar(20)
+  Title       String  @db.NVarChar(150)
+  Description String? @db.NVarChar(Max)
+  IsActive    Boolean @default(true)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  createdByEmployee  Employee  @relation("JobCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("JobModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  positions Position[]
+}
+
+/// Siege concret d'un metier dans une entite precise. Auto-referencee via
+/// ParentPositionId pour construire la chaine de validation N+1 a N+4.
+model Position {
+  Id                 String  @id @default(uuid()) @db.UniqueIdentifier
+  Code               String  @unique @db.NVarChar(20)
+  Title              String  @db.NVarChar(150)
+  JobId              String  @db.UniqueIdentifier
+  // Nullable : un poste n'est plus necessairement rattache a une entite
+  // precise — c'est l'employe qui l'est (Employee.OrganizationUnitId).
+  OrganizationUnitId String? @db.UniqueIdentifier
+  ParentPositionId   String? @db.UniqueIdentifier
+  // Nombre de sieges ouverts sur ce poste (voir decision du 30/07 : un poste
+  // est un "type de poste avec N ouvertures", pas un siege unique) — le
+  // nombre de sieges occupes se deduit en comptant les Employee.PositionId
+  // pointant ici, jamais stocke (evite tout desync, voir position.service.ts
+  // occupiedCount()).
+  Capacity           Int     @default(1)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  job              Job               @relation(fields: [JobId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  organizationUnit OrganizationUnit? @relation(fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  parentPosition       Position?  @relation("PositionHierarchy", fields: [ParentPositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  subordinatePositions Position[] @relation("PositionHierarchy")
+
+  createdByEmployee  Employee  @relation("PositionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("PositionModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  employees Employee[]
+
+  @@index([JobId])
+  @@index([OrganizationUnitId])
+  @@index([ParentPositionId])
+}
+
+// =========================================================================
+// EMPLOYEE
+// =========================================================================
+
+/// Toute personne dans le systeme : employe, RH, chef de departement,
+/// directeur. Table centrale de la plateforme. Le manager se deduit via
+/// Position.ParentPositionId ou OrganizationUnit.ManagerId (pas de ManagerId
+/// direct sur Employee).
+model Employee {
+  Id              String    @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeNumber  String    @unique @db.NVarChar(20)
+  FirstName       String    @db.NVarChar(100)
+  LastName        String    @db.NVarChar(100)
+  // Prenom + Nom, calcule et mis a jour a chaque sauvegarde par le backend
+  FullName        String    @db.NVarChar(200)
+  // Gender: M | F
+  Gender          String    @db.NVarChar(5)
+  BirthDate       DateTime  @db.Date
+  BirthPlace      String?   @db.NVarChar(100)
+  // MaritalStatus: Single | Married | Divorced | Widowed
+  MaritalStatus   String    @db.NVarChar(20)
+  // IdType: NationalId | Passport | ResidencePermit
+  IdType          String    @db.NVarChar(20)
+  IdNumber        String?   @db.NVarChar(50)
+  MobilePhone     String?   @db.NVarChar(30)
+  WorkPhone       String?   @db.NVarChar(30)
+  Email           String    @unique @db.NVarChar(150)
+  // ContractType: Permanent | FixedTerm | Internship | Freelance | Apprenticeship | WorkStudy
+  ContractType    String    @db.NVarChar(20)
+  HireDate        DateTime  @db.Date
+  TerminationDate DateTime? @db.Date
+
+  PositionId         String? @db.UniqueIdentifier
+  OrganizationUnitId String  @db.UniqueIdentifier
+  // Categorie de frais (per diem mission) — voir EmployeeCategory /
+  // ExpenseConfig. Nullable : un employe sans categorie assignee ne peut pas
+  // soumettre d'ordre de mission tant que le RH ne l'a pas renseignee.
+  EmployeeCategoryId String? @db.UniqueIdentifier
+
+  // Compte utilisateur de la plateforme AfrikEdge donnant acces au systeme,
+  // nullable si l'employe n'a pas de compte. Table locale (hors modele PDF).
+  // NOTE SQL Server : @unique genere ici une UNIQUE CONSTRAINT classique qui
+  // n'autorise qu'UNE SEULE ligne NULL au total (contrairement a Postgres/
+  // MySQL) — cassant des le 2e employe sans compte. seed.ts la remplace par
+  // un index unique FILTRE (WHERE UserId IS NOT NULL) a chaque demarrage —
+  // voir fixEmployeeUserIdUniqueIndex(), a rejouer apres tout `db push`.
+  UserId       String? @unique @db.UniqueIdentifier
+  // Status: Active | OnTrial | OnLeave | Inactive
+  Status       String  @db.NVarChar(10)
+  // Regime de conges (reunion Dominique du 12/06) : un employe "local" qui
+  // est absent tout le vendredi precedant un week-end voit ce week-end aussi
+  // decompte de son solde (ex: conge pris vendredi->lundi = 3 jours), pas un
+  // "expatrie" (voir leave-request.service.ts computeWorkingDays). false par
+  // defaut = regime local, le plus repandu chez HV.
+  IsExpatriate Boolean @default(false)
+  // Compte d'amorçage cree par le seed (ex : "Admin HV"), pas un vrai
+  // membre du personnel — ne doit jamais apparaitre comme option dans un
+  // selecteur (beneficiaire, interimaire, validateur, responsable...), voir
+  // employee.service.ts findAll/findTeam/findDirectory. Reste visible et
+  // gerable normalement partout ou l'admin le cherche explicitement par nom.
+  IsSystem     Boolean @default(false)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  // Suppression (Lot I) — voir OrganizationUnit ci-dessus pour la justification.
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  position         Position?         @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  organizationUnit OrganizationUnit  @relation("EmployeeOrganizationUnit", fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  user             User?             @relation(fields: [UserId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employeeCategory EmployeeCategory? @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee?  @relation("EmployeeCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employeesCreated   Employee[] @relation("EmployeeCreatedBy")
+  modifiedByEmployee Employee?  @relation("EmployeeModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employeesModified  Employee[] @relation("EmployeeModifiedBy")
+
+  // Back-relations — units/records this employee manages or authored
+  organizationUnitsManaged  OrganizationUnit[] @relation("OrganizationUnitManager")
+  organizationUnitsCreated  OrganizationUnit[] @relation("OrganizationUnitCreatedBy")
+  organizationUnitsModified OrganizationUnit[] @relation("OrganizationUnitModifiedBy")
+
+  jobsCreated  Job[] @relation("JobCreatedBy")
+  jobsModified Job[] @relation("JobModifiedBy")
+
+  positionsCreated  Position[] @relation("PositionCreatedBy")
+  positionsModified Position[] @relation("PositionModifiedBy")
+
+  approvalPoolsCreated  ApprovalPool[] @relation("ApprovalPoolCreatedBy")
+  approvalPoolsModified ApprovalPool[] @relation("ApprovalPoolModifiedBy")
+
+  approvalPoolMemberships        ApprovalPoolMember[] @relation("ApprovalPoolMemberEmployee")
+  approvalPoolInterimMemberships ApprovalPoolMember[] @relation("ApprovalPoolMemberInterim")
+  approvalPoolMembersCreated     ApprovalPoolMember[] @relation("ApprovalPoolMemberCreatedBy")
+
+  approvalDecisionsValidated ApprovalDecision[] @relation("ApprovalDecisionValidatedBy")
+  approvalDecisionsCreated   ApprovalDecision[] @relation("ApprovalDecisionCreatedBy")
+
+  companySettingsModified CompanySettings[] @relation("CompanySettingsModifiedBy")
+
+  calendarsCreated  Calendar[] @relation("CalendarCreatedBy")
+  calendarsModified Calendar[] @relation("CalendarModifiedBy")
+
+  holidaysCreated Holiday[] @relation("HolidayCreatedBy")
+
+  leaveTypesCreated  LeaveType[] @relation("LeaveTypeCreatedBy")
+  leaveTypesModified LeaveType[] @relation("LeaveTypeModifiedBy")
+
+  leaveTransactions        LeaveTransaction[] @relation("LeaveTransactionEmployee")
+  leaveTransactionsCreated LeaveTransaction[] @relation("LeaveTransactionCreatedBy")
+
+  leaveCancellations        LeaveCancellation[] @relation("LeaveCancellationEmployee")
+  leaveCancellationsCreated LeaveCancellation[] @relation("LeaveCancellationCreatedBy")
+
+  leaveRequests          LeaveRequest[] @relation("LeaveRequestEmployee")
+  leaveRequestsAsInterim LeaveRequest[] @relation("LeaveRequestInterim")
+  leaveRequestsCreated   LeaveRequest[] @relation("LeaveRequestCreatedBy")
+  leaveRequestsModified  LeaveRequest[] @relation("LeaveRequestModifiedBy")
+
+  leaveBalances EmployeeLeaveBalance[]
+
+  missionOrders         MissionOrder[] @relation("MissionOrderEmployee")
+  missionOrdersCreated  MissionOrder[] @relation("MissionOrderCreatedBy")
+  missionOrdersModified MissionOrder[] @relation("MissionOrderModifiedBy")
+
+  expenseReports         ExpenseReport[] @relation("ExpenseReportEmployee")
+  expenseReportsCreated  ExpenseReport[] @relation("ExpenseReportCreatedBy")
+  expenseReportsModified ExpenseReport[] @relation("ExpenseReportModifiedBy")
+
+  expenseLinesCreated  ExpenseLine[] @relation("ExpenseLineCreatedBy")
+  expenseLinesModified ExpenseLine[] @relation("ExpenseLineModifiedBy")
+
+  missionExpenseLinesCreated MissionExpenseLine[] @relation("MissionExpenseLineCreatedBy")
+
+  employeeCategoriesCreated  EmployeeCategory[] @relation("EmployeeCategoryCreatedBy")
+  employeeCategoriesModified EmployeeCategory[] @relation("EmployeeCategoryModifiedBy")
+
+  expenseTypesCreated  ExpenseType[] @relation("ExpenseTypeCreatedBy")
+  expenseTypesModified ExpenseType[] @relation("ExpenseTypeModifiedBy")
+
+  expenseConfigsCreated  ExpenseConfig[] @relation("ExpenseConfigCreatedBy")
+  expenseConfigsModified ExpenseConfig[] @relation("ExpenseConfigModifiedBy")
+
+  expenseCeilingsCreated  ExpenseCeiling[] @relation("ExpenseCeilingCreatedBy")
+  expenseCeilingsModified ExpenseCeiling[] @relation("ExpenseCeilingModifiedBy")
+
+  attachmentsCreated Attachment[] @relation("AttachmentCreatedBy")
+
+  userPermissionsGranted UserPermission[] @relation("UserPermissionCreatedBy")
+
+  categoryPermissionsGranted CategoryPermission[] @relation("CategoryPermissionCreatedBy")
+
+  notifications Notification[]
+
+  @@index([PositionId])
+  @@index([OrganizationUnitId])
+  @@index([EmployeeCategoryId])
+}
+
+/// Compte utilisateur donnant acces a la plateforme AfrikEdge / Productive
+/// 247 HRM. Absent du modele de donnees PDF (qui traite ce compte comme une
+/// reference externe), mais requis ici pour porter l'authentification locale
+/// du backend. Un Employee a au plus un User (Employee.UserId, unique).
+model User {
+  Id                 String    @id @default(uuid()) @db.UniqueIdentifier
+  Username           String    @unique @db.NVarChar(100)
+  Email              String    @unique @db.NVarChar(150)
+  PasswordHash       String    @db.NVarChar(500)
+  IsActive           Boolean   @default(true)
+  // Force le changement de mot de passe à la prochaine connexion — vrai par
+  // défaut (mot de passe temporaire fixé à la création du compte via
+  // POST /users), remis à false par PATCH /auth/change-password.
+  MustChangePassword Boolean   @default(true)
+  LastLoginAt        DateTime? @db.DateTime2
+
+  // Mot de passe oublié — jeton a usage unique, jamais stocké en clair (voir
+  // AuthService.forgotPassword). Expire (voir ResetPasswordExpiresAt) ; vidé
+  // après un reset réussi ou l'émission d'un nouveau jeton.
+  ResetPasswordTokenHash String?   @db.NVarChar(255)
+  ResetPasswordExpiresAt DateTime? @db.DateTime2
+
+  // Categorie attribuee a l'activation de l'acces systeme (voir
+  // Employee.UserId) — la MEME EmployeeCategory que celle utilisee pour le
+  // perdiem (voir ExpenseConfig). Porte le paquet de permissions par defaut
+  // de la categorie, copie une seule fois dans UserPermission au moment de
+  // la creation du compte (voir UserService.create) : un changement ulterieur
+  // des permissions de la categorie n'affecte JAMAIS retroactivement les
+  // comptes deja crees, seulement les prochains (voir decision du 29/07).
+  // Reste modifiable au cas par cas ensuite (EmployeeCategoryController).
+  EmployeeCategoryId String @db.UniqueIdentifier
+
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedAt DateTime? @db.DateTime2
+
+  employee         Employee?
+  employeeCategory EmployeeCategory @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  userPermissions  UserPermission[]
+
+  @@index([EmployeeCategoryId])
+}
+
+/// Catalogue fixe des permissions atomiques : chaque Code correspond a un
+/// controle reel applique sur une route backend (@RequirePermissions). Le
+/// catalogue s'enrichit au fur et a mesure qu'on cable chaque module ; il
+/// n'est pas cree librement depuis l'ecran Administration (contrairement aux
+/// categories), seule l'association Categorie <-> Permission l'est.
+model Permission {
+  Id     String @id @default(uuid()) @db.UniqueIdentifier
+  // ex: "employees.view.team"
+  Code   String @unique @db.NVarChar(100)
+  // libelle affiche dans l'ecran Administration
+  Label  String @db.NVarChar(200)
+  // regroupement pour l'affichage, ex: "Employes", "Administration"
+  Module String @db.NVarChar(50)
+
+  categoryPermissions CategoryPermission[]
+  userPermissions     UserPermission[]
+}
+
+/// Permissions accordees par defaut a une EmployeeCategory — sert UNIQUEMENT
+/// de gabarit copie dans UserPermission au moment de la creation d'un compte
+/// (voir UserService.create). Modifier cette liste ne touche jamais les
+/// comptes deja crees : c'est le point explicitement demande le 29/07 (le
+/// RH doit pouvoir retirer un droit "pour les prochains" sans craindre de le
+/// retirer sous le pied de quelqu'un qui l'a deja). Voir le bandeau
+/// d'avertissement sur EmployeeCategoriesConfigView.vue cote front.
+model CategoryPermission {
+  Id                 String @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeCategoryId String @db.UniqueIdentifier
+  PermissionId       String @db.UniqueIdentifier
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  employeeCategory EmployeeCategory @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  permission       Permission       @relation(fields: [PermissionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee Employee @relation("CategoryPermissionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([EmployeeCategoryId, PermissionId])
+  @@index([PermissionId])
+}
+
+/// Permission accordee individuellement a un User — la source UNIQUE de
+/// verite pour ses droits effectifs (voir PermissionGuard : plus aucune
+/// jointure vers une categorie en direct sur ce chemin). Peuplee une premiere
+/// fois par copie du gabarit CategoryPermission a la creation du compte, puis
+/// editable au cas par cas (EMPLOYE_PERMISSION_GERER) independamment de tout
+/// changement ulterieur sur la categorie. Presence de la ligne = accorde ;
+/// suppression = retire (pas de flag IsGranted, plus de "role" sous-jacent
+/// a surcharger).
+model UserPermission {
+  Id           String @id @default(uuid()) @db.UniqueIdentifier
+  UserId       String @db.UniqueIdentifier
+  PermissionId String @db.UniqueIdentifier
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  user       User       @relation(fields: [UserId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  permission Permission @relation(fields: [PermissionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee Employee @relation("UserPermissionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([UserId, PermissionId])
+  @@index([PermissionId])
+  @@index([CreatedBy])
+}
+
+// =========================================================================
+// VALIDATION WORKFLOW
+// =========================================================================
+
+/// Definit qui valide quoi dans quelle unite. Un pool est configure par type
+/// de demande et par unite. Si une unite n'a pas de pool, le backend remonte
+/// la hierarchie via OrganizationUnit.ParentId.
+model ApprovalPool {
+  Id                 String  @id @default(uuid()) @db.UniqueIdentifier
+  OrganizationUnitId String  @db.UniqueIdentifier
+  // ObjectType: Leave | Mission | ExpenseReport
+  ObjectType         String  @db.NVarChar(20)
+  Name               String  @db.NVarChar(150)
+  IsActive           Boolean @default(true)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  organizationUnit OrganizationUnit @relation(fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("ApprovalPoolCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("ApprovalPoolModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  members        ApprovalPoolMember[]
+  leaveRequests  LeaveRequest[]
+  missionOrders  MissionOrder[]
+  expenseReports ExpenseReport[]
+
+  @@index([OrganizationUnitId])
+}
+
+/// Validateurs d'un pool dans l'ordre de validation. Gere l'interim pour
+/// remplacer temporairement un validateur absent.
+model ApprovalPoolMember {
+  Id                String    @id @default(uuid()) @db.UniqueIdentifier
+  ApprovalPoolId    String    @db.UniqueIdentifier
+  // StepOrder: 1 = N+1, 2 = N+2, 3 = N+3, 4 = N+4
+  StepOrder         Int
+  EmployeeId        String    @db.UniqueIdentifier
+  InterimEmployeeId String?   @db.UniqueIdentifier
+  InterimStartDate  DateTime? @db.DateTime2
+  InterimEndDate    DateTime? @db.DateTime2
+  IsMandatory       Boolean   @default(true)
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  approvalPool ApprovalPool @relation(fields: [ApprovalPoolId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  employee        Employee  @relation("ApprovalPoolMemberEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  interimEmployee Employee? @relation("ApprovalPoolMemberInterim", fields: [InterimEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee Employee @relation("ApprovalPoolMemberCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  decisions ApprovalDecision[]
+
+  @@index([ApprovalPoolId])
+  @@index([EmployeeId])
+  @@index([InterimEmployeeId])
+}
+
+/// Historique unique de toutes les decisions de validation, tous types de
+/// demandes confondus. Polymorphique via EntityType + EntityId.
+model ApprovalDecision {
+  Id String @id @default(uuid()) @db.UniqueIdentifier
+
+  // EntityType: LeaveRequest | MissionOrder | ExpenseReport
+  EntityType            String    @db.NVarChar(30)
+  // ID de la demande concernee (LeaveRequest, MissionOrder ou ExpenseReport
+  // selon EntityType) — reference polymorphique, pas de FK Prisma.
+  EntityId              String    @db.UniqueIdentifier
+  ApprovalPoolMemberId  String    @db.UniqueIdentifier
+  ValidatedByEmployeeId String    @db.UniqueIdentifier
+  StepOrder             Int
+  // Decision: Pending | Approved | Rejected | Returned
+  Decision              String    @db.NVarChar(20)
+  Comment               String?   @db.NVarChar(500)
+  DecidedAt             DateTime? @db.DateTime2
+  // Jeton public pour la validation par email (clique-pour-approuver sans
+  // connexion) — genere a la creation de la decision, verifie cote
+  // PublicApprovalService (findFirst, pas findUnique : pas de contrainte
+  // @unique ici — sous SQL Server, un UNIQUE constraint interdit plusieurs
+  // NULL sur la meme colonne, ce que toutes les decisions pre-existantes a
+  // cette fonctionnalite auraient viole ; 192 bits d'alea rendent une
+  // collision reelle negligeable, l'index suffit pour la performance du
+  // lookup). Invalide de facto des que Decision != Pending (voir la
+  // verification "Decision: Pending" dans le lookup par token).
+  Token                 String?   @db.NVarChar(64)
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  approvalPoolMember ApprovalPoolMember @relation(fields: [ApprovalPoolMemberId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  validatedByEmployee Employee @relation("ApprovalDecisionValidatedBy", fields: [ValidatedByEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  createdByEmployee   Employee @relation("ApprovalDecisionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([EntityType, EntityId])
+  @@index([ApprovalPoolMemberId])
+  @@index([ValidatedByEmployeeId])
+  @@index([Token])
+}
+
+// =========================================================================
+// CONFIGURATION & CALENDRIER
+// =========================================================================
+
+/// Parametres globaux de l'entreprise. Table singleton : une seule ligne,
+/// jamais inseree une deuxieme fois.
+model CompanySettings {
+  Id                        String    @id @default(uuid()) @db.UniqueIdentifier
+  CompanyName               String    @db.NVarChar(150)
+  Currency                  String    @db.NVarChar(3)
+  Timezone                  String    @db.NVarChar(50)
+  // DayCountingRule: WorkingDays | CalendarDays
+  DayCountingRule           String    @db.NVarChar(20)
+  DefaultMonthlyAccrualRate Decimal   @db.Decimal(5, 2)
+  DefaultCarryOverCap       Int
+  // Jour du mois (1-28) ou tourne la generation automatique des acquisitions
+  // de conges (LeaveTransaction). Nullable : generation manuelle uniquement
+  // tant que l'entreprise n'a pas choisi de jour.
+  LeaveAccrualRunDay        Int?
+  LastLeaveAccrualRunAt     DateTime? @db.DateTime2
+  // Vrai une fois que l'assistant de configuration initiale (calendrier +
+  // structure + equipe) a ete complete par un administrateur — sert de garde
+  // au routeur frontend pour ne plus jamais raffiche l'onboarding ensuite.
+  IsOnboarded               Boolean   @default(false)
+
+  // Derniere portee consultee dans Configuration > Calendrier ('Global' ou
+  // 'Category') — persistee cote serveur (pas de localStorage) pour que
+  // n'importe quel admin, sur n'importe quel poste, retrouve l'etat laisse.
+  // CalendarConfigCategoryId n'a de sens que si CalendarConfigScope =
+  // 'Category' ; pas de FK, la valeur est juste ignoree cote frontend si la
+  // categorie n'existe plus.
+  CalendarConfigScope      String? @db.NVarChar(20)
+  CalendarConfigCategoryId String? @db.UniqueIdentifier
+
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  modifiedByEmployee Employee? @relation("CompanySettingsModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// Definit les jours et horaires de travail de l'entreprise. Entite
+/// autonome, separee de CompanySettings pour permettre plusieurs calendriers.
+model Calendar {
+  Id        String  @id @default(uuid()) @db.UniqueIdentifier
+  Name      String  @db.NVarChar(100)
+  IsDefault Boolean @default(false)
+
+  // Nullable : calendrier global (portee par defaut) quand absent. Unique
+  // sur un champ nullable — MSSQL autorise plusieurs NULL, une seule ligne
+  // par categorie precise (voir decision du 04/08 : calendrier par
+  // categorie uniquement, pas de surcharge par employe individuel).
+  EmployeeCategoryId String? @unique @db.UniqueIdentifier
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  employeeCategory   EmployeeCategory? @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  createdByEmployee  Employee          @relation("CalendarCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee?         @relation("CalendarModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  workDays CalendarWorkDay[]
+}
+
+/// Configuration horaire d'un jour de la semaine pour un Calendar donne.
+/// Une ligne par jour (Monday..Sunday), avec pause optionnelle. Remplace
+/// l'ancien couple WorkDays/DailyStartTime/DailyEndTime a plat sur Calendar,
+/// qui ne permettait ni variation par jour ni pause.
+model CalendarWorkDay {
+  Id         String @id @default(uuid()) @db.UniqueIdentifier
+  CalendarId String @db.UniqueIdentifier
+
+  // DayOfWeek: Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday
+  DayOfWeek      String    @db.NVarChar(10)
+  IsEnabled      Boolean   @default(true)
+  StartTime      DateTime? @db.Time
+  EndTime        DateTime? @db.Time
+  BreakEnabled   Boolean   @default(false)
+  BreakStartTime DateTime? @db.Time
+  BreakEndTime   DateTime? @db.Time
+
+  calendar Calendar @relation(fields: [CalendarId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([CalendarId, DayOfWeek])
+}
+
+/// Calendrier des jours feries utilise par le backend pour exclure ces jours
+/// du calcul de duree des absences.
+model Holiday {
+  Id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  Name               String   @db.NVarChar(150)
+  Date               DateTime @db.Date
+  IsRecurring        Boolean  @default(false)
+  // HolidayType: National | Local
+  HolidayType        String   @db.NVarChar(10)
+  OrganizationUnitId String?  @db.UniqueIdentifier
+  // Ciblage d'eligibilite (demande client, 01/09), meme mecanisme que
+  // sur LeaveType ci-dessus — nul/absent = s'applique a tout le monde.
+  AppliesToGender     String?  @db.NVarChar(5)
+  AppliesToExpatriate Boolean?
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  organizationUnit  OrganizationUnit? @relation(fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  createdByEmployee Employee          @relation("HolidayCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([OrganizationUnitId])
+}
+
+// =========================================================================
+// LEAVE MANAGEMENT
+// =========================================================================
+
+/// Types de conges configurables par l'admin RH. Chaque type a ses propres
+/// regles d'accumulation, de plafond et de validation.
+model LeaveType {
+  Id                   String   @id @default(uuid()) @db.UniqueIdentifier
+  Code                 String   @unique @db.NVarChar(20)
+  Name                 String   @db.NVarChar(100)
+  // WorkflowType: Standard | Medical
+  WorkflowType         String   @db.NVarChar(20)
+  MonthlyAccrual       Boolean  @default(false)
+  DaysPerYear          Decimal  @db.Decimal(5, 2)
+  DaysPerMonth         Decimal? @db.Decimal(5, 2)
+  DocumentRequired     Boolean  @default(false)
+  // Delai (en jours, a partir du debut de l'absence) pour fournir le
+  // justificatif quand DocumentRequired est actif — plan de tests #40
+  // (volet parametrage du workflow Medical, mais applicable a tout type).
+  DocumentDeadlineDays Int?
+  CarryOverAllowed     Boolean  @default(false)
+  CarryOverCap         Int      @default(0)
+  MinNoticeDays        Int      @default(0)
+  Color                String   @db.NVarChar(20)
+  IsActive             Boolean  @default(true)
+  IsSystem             Boolean  @default(false)
+
+  // Ciblage d'eligibilite (demande client, 01/09) : nul/absent =
+  // s'applique a tout le monde sur ce critere. Meme mecanisme et memes
+  // colonnes que sur Holiday ci-dessous, voir common/utils/eligibility.util.ts
+  // pour la logique de filtrage partagee entre les deux.
+  AppliesToGender      String?  @db.NVarChar(5)
+  AppliesToExpatriate  Boolean?
+  OrganizationUnitId   String?  @db.UniqueIdentifier
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  createdByEmployee  Employee  @relation("LeaveTypeCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("LeaveTypeModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  organizationUnit   OrganizationUnit? @relation(fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  leaveTransactions  LeaveTransaction[]
+  leaveCancellations LeaveCancellation[]
+  leaveRequests      LeaveRequest[]
+  employeeBalances   EmployeeLeaveBalance[]
+
+  @@index([OrganizationUnitId])
+}
+
+/// Solde courant de conges par employe et par type — maintenu a jour de
+/// facon incrementale (cron d'acquisition, approbation/annulation de
+/// LeaveRequest) plutot que recalcule a chaque lecture. LeaveTransaction
+/// reste la trace d'audit de chaque mouvement ; ce modele est le cache
+/// rapide que lisent les ecrans (KPI, tableau des soldes).
+model EmployeeLeaveBalance {
+  Id          String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId  String   @db.UniqueIdentifier
+  // Nullable : passe a null si le LeaveType est supprime (onDelete: SetNull)
+  // plutot que de bloquer la suppression — la ligne de solde survit comme
+  // attribut orphelin, invisible (getBalances ne l'affiche que via une
+  // correspondance sur un LeaveType actif existant), plutot que perdue.
+  LeaveTypeId String?  @db.UniqueIdentifier
+  Balance     Decimal  @default(0) @db.Decimal(6, 2)
+  ModifiedAt  DateTime @default(now()) @db.DateTime2
+
+  employee  Employee   @relation(fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  leaveType LeaveType? @relation(fields: [LeaveTypeId], references: [Id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@unique([EmployeeId, LeaveTypeId])
+  @@index([EmployeeId])
+  @@index([LeaveTypeId])
+}
+
+/// Journal unique des transactions de conges. Remplace LeaveAcquisition et
+/// LeaveConsumption. Le solde se calcule par une simple somme de toutes les
+/// transactions.
+model LeaveTransaction {
+  Id             String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId     String   @db.UniqueIdentifier
+  // Nullable, meme raison que EmployeeLeaveBalance.LeaveTypeId ci-dessus —
+  // la suppression d'un LeaveType ne doit pas etre bloquee par son propre
+  // historique d'audit.
+  LeaveTypeId    String?  @db.UniqueIdentifier
+  // Type: Acquisition | Consumption
+  Type           String   @db.NVarChar(20)
+  Days           Decimal  @db.Decimal(5, 2)
+  StartDate      DateTime @db.Date
+  EndDate        DateTime @db.Date
+  LeaveRequestId String?  @db.UniqueIdentifier
+  // Source: System (accrual automatique ou mouvement lie a une demande de
+  // conge) | Manual (ajustement ponctuel via "Ajuster un solde"). Necessaire
+  // pour que generateAccruals() reconnaisse SES PROPRES credits precedents
+  // sans se laisser tromper par un ajustement manuel identique en apparence
+  // (meme Type='Acquisition', meme LeaveRequestId nul) — sinon un credit
+  // manuel bloquait a tort le prochain credit automatique de la periode.
+  Source         String   @default("System") @db.NVarChar(20)
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  employee     Employee      @relation("LeaveTransactionEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  leaveType    LeaveType?    @relation(fields: [LeaveTypeId], references: [Id], onDelete: SetNull, onUpdate: NoAction)
+  leaveRequest LeaveRequest? @relation(fields: [LeaveRequestId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee Employee @relation("LeaveTransactionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([EmployeeId])
+  @@index([LeaveTypeId])
+  @@index([LeaveRequestId])
+}
+
+/// Enregistre les jours de conge perdus lors de la cloture annuelle quand un
+/// employe depasse le plafond de report autorise.
+model LeaveCancellation {
+  Id            String  @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId    String  @db.UniqueIdentifier
+  LeaveTypeId   String  @db.UniqueIdentifier
+  Year          Int
+  DaysCancelled Decimal @db.Decimal(5, 2)
+  Reason        String  @db.NVarChar(255)
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  employee  Employee  @relation("LeaveCancellationEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  leaveType LeaveType @relation(fields: [LeaveTypeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee Employee @relation("LeaveCancellationCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([EmployeeId])
+  @@index([LeaveTypeId])
+}
+
+/// Demande de conge ou d'absence soumise par un employe. Le solde n'est
+/// jamais stocke ici — il se deduit des LeaveTransaction.
+model LeaveRequest {
+  Id                  String   @id @default(uuid()) @db.UniqueIdentifier
+  ReferenceCode       String   @unique @db.NVarChar(20)
+  EmployeeId          String   @db.UniqueIdentifier
+  LeaveTypeId         String   @db.UniqueIdentifier
+  StartDate           DateTime @db.Date
+  // StartPeriod/EndPeriod : full | am | pm — une demande d'une seule demi-
+  // journee a StartDate == EndDate avec un des deux a "am"/"pm". Necessaire
+  // pour la regle du vendredi/week-end (voir computeWorkingDays) : chez un
+  // employe local, une presence meme partielle le vendredi protege le
+  // week-end suivant du decompte — sans ce champ, impossible a distinguer
+  // d'une absence complete.
+  StartPeriod         String   @default("full") @db.NVarChar(4)
+  EndDate             DateTime @db.Date
+  EndPeriod           String   @default("full") @db.NVarChar(4)
+  DaysCount           Decimal  @db.Decimal(5, 2)
+  Reason              String?  @db.NVarChar(500)
+  InterimEmployeeId   String?  @db.UniqueIdentifier
+  // Status: Draft | Pending | InApprovalN1 | InApprovalN2 | InApprovalN3 |
+  // InApprovalN4 | Approved | Rejected | Returned | Cancelled | Registered |
+  // Done | Regularized
+  // Registered/Done/Regularized sont reserves aux LeaveType.WorkflowType =
+  // 'Medical' : pas de passage par un ApprovalPool, la demande est
+  // enregistree directement (declaration a posteriori), puis marquee
+  // effectuee et enfin regularisee une fois le justificatif fourni.
+  Status              String   @db.NVarChar(25)
+  ApprovalPoolId      String?  @db.UniqueIdentifier
+  CurrentApprovalStep Int?
+  RejectionReason     String?  @db.NVarChar(500)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  // Suppression (Lot I) — voir OrganizationUnit pour la justification.
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  employee        Employee      @relation("LeaveRequestEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  leaveType       LeaveType     @relation(fields: [LeaveTypeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  interimEmployee Employee?     @relation("LeaveRequestInterim", fields: [InterimEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  approvalPool    ApprovalPool? @relation(fields: [ApprovalPoolId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("LeaveRequestCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("LeaveRequestModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  leaveTransactions LeaveTransaction[]
+
+  @@index([EmployeeId])
+  @@index([LeaveTypeId])
+  @@index([ApprovalPoolId])
+}
+
+// =========================================================================
+// MISSIONS & NOTES DE FRAIS
+// =========================================================================
+
+/// Demande de deplacement professionnel. Aucun montant total stocke — les
+/// totaux sont calcules cote frontend depuis les ExpenseLine.
+model MissionOrder {
+  Id                  String   @id @default(uuid()) @db.UniqueIdentifier
+  ReferenceCode       String   @unique @db.NVarChar(20)
+  EmployeeId          String   @db.UniqueIdentifier
+  Destination         String   @db.NVarChar(150)
+  // MissionCategory: National | International
+  MissionCategory     String   @db.NVarChar(20)
+  Purpose             String   @db.NVarChar(500)
+  DepartureDate       DateTime @db.Date
+  ReturnDate          DateTime @db.Date
+  DaysCount           Decimal  @db.Decimal(5, 2)
+  // TransportModeGo / TransportModeReturn: PersonalCar | CompanyCar |
+  // PublicTransport | Plane | Other
+  TransportModeGo     String   @db.NVarChar(30)
+  TransportModeReturn String   @db.NVarChar(30)
+  AdvanceRequested    Decimal  @db.Decimal(18, 2)
+  Currency            String   @db.NVarChar(3)
+  // Status: Draft | Pending | InApprovalN1..N4 | Approved | Rejected |
+  // Returned | Cancelled | Closed
+  Status              String   @db.NVarChar(25)
+  ApprovalPoolId      String?  @db.UniqueIdentifier
+  CurrentApprovalStep Int?
+  RejectionReason     String?  @db.NVarChar(500)
+
+  // Mission accompagnant (plan de test #22) — lien symetrique optionnel vers
+  // l'autre ordre de mission cree en meme temps pour la personne associee
+  // (ex: le chauffeur d'un directeur), memes dates/destination/categorie
+  // mais approuve independamment par son propre pool. Rempli des deux cotes
+  // a la creation (A.LinkedMissionOrderId = B.Id et vice-versa) pour que la
+  // fiche de chacun retrouve l'autre sans distinction de sens. Pas de
+  // contrainte @unique : SQL Server rejette les NULL multiples sur une
+  // contrainte unique classique (contrairement a Postgres) — l'unicite du
+  // pairage est garantie cote application (create()), pas en base.
+  LinkedMissionOrderId String? @db.UniqueIdentifier
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  // Suppression (Lot I) — voir OrganizationUnit pour la justification.
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  employee     Employee      @relation("MissionOrderEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  approvalPool ApprovalPool? @relation(fields: [ApprovalPoolId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("MissionOrderCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("MissionOrderModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  linkedMissionOrder     MissionOrder?  @relation("MissionOrderLink", fields: [LinkedMissionOrderId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  linkedFromMissionOrder MissionOrder[] @relation("MissionOrderLink")
+
+  expenseReports      ExpenseReport[]
+  missionExpenseLines MissionExpenseLine[]
+
+  @@index([EmployeeId])
+  @@index([ApprovalPoolId])
+  @@index([LinkedMissionOrderId])
+}
+
+/// Ligne de frais complementaire d'un ordre de mission — saisie a la
+/// creation pour justifier l'acompte demande (AdvanceRequested = per diem
+/// calcule + somme de ces lignes). Persistee pour tracabilite, au lieu
+/// d'etre jetee apres calcul du total (plan de test #18).
+model MissionExpenseLine {
+  Id             String  @id @default(uuid()) @db.UniqueIdentifier
+  MissionOrderId String  @db.UniqueIdentifier
+  ExpenseTypeId  String  @db.UniqueIdentifier
+  Description    String? @db.NVarChar(255)
+  Amount         Decimal @db.Decimal(18, 2)
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  missionOrder      MissionOrder @relation(fields: [MissionOrderId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  expenseType       ExpenseType  @relation(fields: [ExpenseTypeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  createdByEmployee Employee     @relation("MissionExpenseLineCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([MissionOrderId])
+  @@index([ExpenseTypeId])
+}
+
+/// Conteneur des depenses apres une mission. Peut etre lie a une
+/// MissionOrder ou soumis de facon autonome.
+model ExpenseReport {
+  Id                  String    @id @default(uuid()) @db.UniqueIdentifier
+  ReferenceCode       String    @unique @db.NVarChar(20)
+  MissionOrderId      String?   @db.UniqueIdentifier
+  EmployeeId          String    @db.UniqueIdentifier
+  Title               String    @db.NVarChar(150)
+  Currency            String    @db.NVarChar(3)
+  // Status: Draft | InApprovalN1..N4 | Approved | Rejected | Returned |
+  // Cancelled | Reimbursed
+  Status              String    @db.NVarChar(20)
+  ApprovalPoolId      String?   @db.UniqueIdentifier
+  CurrentApprovalStep Int?
+  RejectionReason     String?   @db.NVarChar(500)
+  SubmittedAt         DateTime? @db.DateTime2
+  ReimbursedAt        DateTime? @db.DateTime2
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  // Suppression (Lot I) — voir OrganizationUnit pour la justification.
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  missionOrder MissionOrder? @relation(fields: [MissionOrderId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employee     Employee      @relation("ExpenseReportEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  approvalPool ApprovalPool? @relation(fields: [ApprovalPoolId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("ExpenseReportCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("ExpenseReportModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  lines ExpenseLine[]
+
+  @@index([MissionOrderId])
+  @@index([EmployeeId])
+  @@index([ApprovalPoolId])
+}
+
+/// Ligne de depense individuelle d'une note de frais. Les totaux sont
+/// toujours calcules a l'affichage depuis ces lignes — jamais stockes.
+model ExpenseLine {
+  Id              String   @id @default(uuid()) @db.UniqueIdentifier
+  ExpenseReportId String   @db.UniqueIdentifier
+  ExpenseDate     DateTime @db.Date
+  ExpenseTypeId   String   @db.UniqueIdentifier
+  Description     String?  @db.NVarChar(255)
+  Amount          Decimal  @db.Decimal(18, 2)
+  Currency        String   @db.NVarChar(3)
+  HasDocument     Boolean  @default(false)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  expenseReport ExpenseReport @relation(fields: [ExpenseReportId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  expenseType   ExpenseType   @relation(fields: [ExpenseTypeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("ExpenseLineCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("ExpenseLineModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([ExpenseReportId])
+  @@index([ExpenseTypeId])
+}
+
+/// Classification configurable des employes — porte a la fois (1) le taux de
+/// frais applicable via la matrice ExpenseConfig et (2) le paquet de
+/// permissions applique aux comptes utilisateur crees pour un employe de
+/// cette categorie (voir CategoryPermission, User.EmployeeCategoryId).
+/// Remplace l'ancien Role RBAC et l'ancienne JobCategory : une seule notion
+/// de "categorie", modifiable/ajoutable librement par un Directeur RH (voir
+/// decision du 29/07 — "role et categorie c'est la meme chose").
+model EmployeeCategory {
+  Id          String  @id @default(uuid()) @db.UniqueIdentifier
+  Code        String  @unique @db.NVarChar(20)
+  Name        String  @db.NVarChar(100)
+  Description String? @db.NVarChar(255)
+  IsActive    Boolean @default(true)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  createdByEmployee  Employee  @relation("EmployeeCategoryCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("EmployeeCategoryModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  expenseConfigs      ExpenseConfig[]
+  expenseCeilings     ExpenseCeiling[]
+  employees           Employee[]
+  users               User[]
+  categoryPermissions CategoryPermission[]
+  calendars           Calendar[]
+}
+
+/// Catalogue configurable des types de frais. L'admin RH peut ajouter ou
+/// modifier les types sans toucher au code.
+model ExpenseType {
+  Id       String  @id @default(uuid()) @db.UniqueIdentifier
+  Code     String  @unique @db.NVarChar(20)
+  Name     String  @db.NVarChar(100)
+  // Unit: PerDay | PerTrip | PerItem
+  Unit     String  @db.NVarChar(20)
+  IsActive Boolean @default(true)
+  // "Autre" (catch-all) — toujours present et jamais desactivable, pour
+  // qu'une ligne de note de frais ait toujours un type disponible meme si
+  // la configuration a oublie un cas (decision du 12/08).
+  IsSystem Boolean @default(false)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  createdByEmployee  Employee  @relation("ExpenseTypeCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("ExpenseTypeModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  expenseLines        ExpenseLine[]
+  expenseConfigs      ExpenseConfig[]
+  expenseCeilings     ExpenseCeiling[]
+  missionExpenseLines MissionExpenseLine[]
+}
+
+/// Matrice de configuration des taux de frais : EmployeeCategory x
+/// ExpenseType x MissionCategory → taux journalier. Remplace tous les
+/// perdiem codes en dur.
+model ExpenseConfig {
+  Id                 String  @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeCategoryId String  @db.UniqueIdentifier
+  ExpenseTypeId      String  @db.UniqueIdentifier
+  // MissionCategory: National | International
+  MissionCategory    String  @db.NVarChar(20)
+  DailyRate          Decimal @db.Decimal(18, 2)
+  Currency           String  @db.NVarChar(3)
+  DocumentRequired   Boolean @default(false)
+  IsActive           Boolean @default(true)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  employeeCategory EmployeeCategory @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  expenseType      ExpenseType      @relation(fields: [ExpenseTypeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("ExpenseConfigCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("ExpenseConfigModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([EmployeeCategoryId, ExpenseTypeId, MissionCategory])
+  // L'index unique ci-dessus commence par EmployeeCategoryId : il ne sert
+  // donc pas les recherches par type de frais seul (ex. verifier qu'un
+  // ExpenseType est encore reference avant desactivation).
+  @@index([ExpenseTypeId])
+}
+
+/// Plafond de remboursement d'une note de frais (independant d'une mission)
+/// par categorie d'employe et type de depense — plan de tests #21 : le
+/// depassement doit bloquer la soumission de la note de frais.
+model ExpenseCeiling {
+  Id                 String  @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeCategoryId String  @db.UniqueIdentifier
+  ExpenseTypeId      String  @db.UniqueIdentifier
+  MaxAmount          Decimal @db.Decimal(18, 2)
+  Currency           String  @db.NVarChar(3)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  employeeCategory EmployeeCategory @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  expenseType      ExpenseType      @relation(fields: [ExpenseTypeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  createdByEmployee  Employee  @relation("ExpenseCeilingCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee? @relation("ExpenseCeilingModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([EmployeeCategoryId, ExpenseTypeId])
+  // Meme raison que ExpenseConfig ci-dessus.
+  @@index([ExpenseTypeId])
+}
+
+// =========================================================================
+// PIECES JOINTES
+// =========================================================================
+
+/// Table generique de pieces jointes. Liee a n'importe quelle entite via
+/// EntityType + EntityId. Remplace tous les champs FileUrl uniques sur les
+/// autres tables.
+model Attachment {
+  Id String @id @default(uuid()) @db.UniqueIdentifier
+
+  // EntityType: LeaveRequest | MissionOrder | ExpenseReport | ExpenseLine
+  EntityType String @db.NVarChar(30)
+  EntityId   String @db.UniqueIdentifier
+  FileName   String @db.NVarChar(255)
+  FileUrl    String @db.NVarChar(500)
+  FileSize   Int
+  MimeType   String @db.NVarChar(100)
+
+  CreatedBy String   @db.UniqueIdentifier
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  createdByEmployee Employee @relation("AttachmentCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([EntityType, EntityId])
+}
+
+// =========================================================================
+// NOTIFICATIONS (Lot E)
+// =========================================================================
+
+/// Notification in-app (cloche) — destinataire unique par ligne, pas de
+/// diffusion groupee. Href pointe vers l'ecran concerne (ex: /hr/absences).
+model Notification {
+  Id         String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId String   @db.UniqueIdentifier
+  // Type: leave | mission | expense | system — pilote l'icone cote frontend.
+  Type       String   @db.NVarChar(20)
+  Title      String   @db.NVarChar(150)
+  Message    String   @db.NVarChar(500)
+  Href       String?  @db.NVarChar(200)
+  IsRead     Boolean  @default(false)
+  CreatedAt  DateTime @default(now()) @db.DateTime2
+
+  employee Employee @relation(fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([EmployeeId])
+}
