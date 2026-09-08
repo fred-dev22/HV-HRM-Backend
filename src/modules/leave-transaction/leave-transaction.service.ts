@@ -359,4 +359,31 @@ export class LeaveTransactionService {
       newBalance: result.newBalance,
     };
   }
+
+  // Fixe le solde a une valeur absolue — import des soldes initiaux (demande
+  // client confirmee le 08/09 : "remplacer" et non "ajouter", contrairement a
+  // creditManual ci-dessus qui reste un delta relatif pour l'ajustement
+  // ponctuel manuel, comportement inchange). Calcule le delta necessaire pour
+  // atteindre la cible puis reutilise creditManual (meme tracabilite dans
+  // LeaveTransaction, meme notification employe) — evite de dupliquer cette
+  // logique. delta === 0 : deja a la bonne valeur, ne declenche ni mouvement
+  // ni notification (reimporter le meme fichier plusieurs fois reste neutre).
+  async setBalance(
+    employeeId: string,
+    leaveTypeId: string,
+    targetBalance: number,
+    reason: string | undefined,
+    actorId: string,
+  ) {
+    const current = await this.getBalance(employeeId, leaveTypeId);
+    const delta = targetBalance - current;
+    if (delta === 0) {
+      return {
+        balances: await this.getBalances(employeeId),
+        wasClamped: false,
+        newBalance: current,
+      };
+    }
+    return this.creditManual(employeeId, leaveTypeId, delta, reason, actorId);
+  }
 }

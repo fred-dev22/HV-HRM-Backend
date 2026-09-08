@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { LeaveTransactionService } from './leave-transaction.service';
 import { CreditBalanceDto } from './dto/credit-balance.dto';
+import { SetBalanceDto } from './dto/set-balance.dto';
 import { GenerateAccrualsDto } from './dto/generate-accruals.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -40,8 +41,14 @@ export class LeaveTransactionController {
   // bouton manuel qui envoie un corps vide.
   @Post('generate-accruals')
   @RequirePermission('CONFIG_TYPES_CONGE')
-  generateAccruals(@Body() dto: GenerateAccrualsDto, @CurrentUser('employeeId') employeeId: string) {
-    return this.service.generateAccruals(employeeId, dto?.LeaveTypeId ? { leaveTypeId: dto.LeaveTypeId } : undefined);
+  generateAccruals(
+    @Body() dto: GenerateAccrualsDto,
+    @CurrentUser('employeeId') employeeId: string,
+  ) {
+    return this.service.generateAccruals(
+      employeeId,
+      dto?.LeaveTypeId ? { leaveTypeId: dto.LeaveTypeId } : undefined,
+    );
   }
 
   // Credit ponctuel et manuel d'un employe pour un type de conge precis —
@@ -50,7 +57,35 @@ export class LeaveTransactionController {
   // affectent directement le solde des employes.
   @Post('credit')
   @RequirePermission('CONFIG_TYPES_CONGE')
-  creditManual(@Body() dto: CreditBalanceDto, @CurrentUser('employeeId') employeeId: string) {
-    return this.service.creditManual(dto.EmployeeId, dto.LeaveTypeId, dto.Amount, dto.Reason, employeeId);
+  creditManual(
+    @Body() dto: CreditBalanceDto,
+    @CurrentUser('employeeId') employeeId: string,
+  ) {
+    return this.service.creditManual(
+      dto.EmployeeId,
+      dto.LeaveTypeId,
+      dto.Amount,
+      dto.Reason,
+      employeeId,
+    );
+  }
+
+  // Fixe le solde a une valeur absolue — utilise par l'import des soldes
+  // initiaux (remplace, ne s'additionne pas au solde existant, voir
+  // LeaveTransactionService.setBalance). Meme permission que credit ci-dessus,
+  // les deux affectent directement le solde des employes.
+  @Post('set-balance')
+  @RequirePermission('CONFIG_TYPES_CONGE')
+  setBalance(
+    @Body() dto: SetBalanceDto,
+    @CurrentUser('employeeId') employeeId: string,
+  ) {
+    return this.service.setBalance(
+      dto.EmployeeId,
+      dto.LeaveTypeId,
+      dto.Amount,
+      dto.Reason,
+      employeeId,
+    );
   }
 }
