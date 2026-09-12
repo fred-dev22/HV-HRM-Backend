@@ -2,11 +2,12 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 
-// Type: leave | mission | expense | system — pilote juste l'icone cote
-// frontend, pas de validation stricte cote base (colonne NVarChar libre).
+// Type: leave | mission | expense | recruitment | reminder | system — pilote
+// juste l'icone cote frontend, pas de validation stricte cote base (colonne
+// NVarChar libre).
 export interface CreateNotificationInput {
   employeeId: string;
-  type: 'leave' | 'mission' | 'expense' | 'system';
+  type: 'leave' | 'mission' | 'expense' | 'recruitment' | 'reminder' | 'system';
   title: string;
   message: string;
   href?: string;

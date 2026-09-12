@@ -53,6 +53,17 @@ export const PERMISSIONS: { Code: string; Label: string; Module: string }[] = [
 
   { Code: 'RAPPORT_VOIR', Label: 'Voir les rapports', Module: 'Rapports' },
   { Code: 'RAPPORT_EXPORTER', Label: 'Exporter les rapports', Module: 'Rapports' },
+
+  // Module Recrutement — volontairement minimal (retour client du 05/09 :
+  // "je vois juste deux permission... et la permission recrutement qui permet
+  // de tout faire la-bas"). Une seule permission ouvre tout le module ; qui
+  // voit le menu peut tout y faire (pas de circuit "approuver / refuser une
+  // offre"). Les deux autres concernent uniquement l'expression de besoin,
+  // exposee cote espace Administration pour que les managers/departements
+  // puissent demander un poste sans acces au module.
+  { Code: 'RECRUTEMENT_ACCES', Label: 'Accéder au module Recrutement (tout faire)', Module: 'Recrutement' },
+  { Code: 'RECRUTEMENT_BESOIN_VOIR', Label: 'Voir les expressions de besoin en recrutement', Module: 'Administration' },
+  { Code: 'RECRUTEMENT_BESOIN_EXPRIMER', Label: 'Exprimer un besoin en recrutement', Module: 'Administration' },
 ];
 
 export const VALIDATEUR_PERMISSIONS = [
@@ -60,6 +71,9 @@ export const VALIDATEUR_PERMISSIONS = [
   'MISSION_VOIR_EQUIPE', 'MISSION_VALIDER',
   'FRAIS_VOIR_EQUIPE', 'FRAIS_VALIDER',
   'EMPLOYE_VOIR_EQUIPE',
+  // Un manager peut exprimer un besoin en recrutement pour son equipe et
+  // suivre ses demandes (espace Administration) — mais pas acceder au module.
+  'RECRUTEMENT_BESOIN_VOIR', 'RECRUTEMENT_BESOIN_EXPRIMER',
 ];
 
 export const ADMIN_RH_PERMISSIONS = [
@@ -69,6 +83,8 @@ export const ADMIN_RH_PERMISSIONS = [
   'ENTITE_VOIR', 'ENTITE_CREER', 'ENTITE_MODIFIER', 'ENTITE_SOUMETTRE',
   'CONFIG_CALENDRIER', 'CONFIG_JOURS_FERIES', 'CONFIG_TYPES_CONGE', 'CONFIG_CATEGORIES_EMPLOYE', 'CONFIG_FRAIS_MISSION', 'CONFIG_METIERS_POSTES',
   'RAPPORT_VOIR', 'RAPPORT_EXPORTER',
+  // Le RH mene le recrutement de bout en bout.
+  'RECRUTEMENT_ACCES',
 ];
 
 export const DIRECTEUR_RH_PERMISSIONS = [

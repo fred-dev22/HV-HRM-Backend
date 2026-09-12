@@ -45,7 +45,15 @@ export class MailService {
   // Ne leve jamais — un email qui echoue ne doit jamais faire echouer
   // l'action metier (approuver une demande, creer un compte...) qui l'a
   // declenche. Retourne juste un booleen pour le logging/tests.
-  async send(params: { to: string; subject: string; html: string }): Promise<boolean> {
+  // `attachments` (optionnel) : pieces jointes en base64, mappees vers des
+  // fileAttachment Graph — utilise pour les invitations calendrier (.ics) du
+  // module Recrutement.
+  async send(params: {
+    to: string;
+    subject: string;
+    html: string;
+    attachments?: { name: string; contentType: string; contentBytes: string }[];
+  }): Promise<boolean> {
     const sender = process.env.GRAPH_MAIL_SENDER;
     if (!sender) {
       this.logger.warn('GRAPH_MAIL_SENDER non configure — email non envoye');
@@ -64,6 +72,16 @@ export class MailService {
             subject: params.subject,
             body: { contentType: 'HTML', content: params.html },
             toRecipients: [{ emailAddress: { address: params.to } }],
+            ...(params.attachments?.length
+              ? {
+                  attachments: params.attachments.map((a) => ({
+                    '@odata.type': '#microsoft.graph.fileAttachment',
+                    name: a.name,
+                    contentType: a.contentType,
+                    contentBytes: a.contentBytes,
+                  })),
+                }
+              : {}),
           },
           saveToSentItems: process.env.GRAPH_MAIL_SAVE_TO_SENT_ITEMS === 'true',
         }),
