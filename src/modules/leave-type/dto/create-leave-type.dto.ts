@@ -91,6 +91,14 @@ export class CreateLeaveTypeDto {
   @IsUUID()
   OrganizationUnitId?: string;
 
+  // Decompte calendaire (retour client, 08/09) : absent/false = jours ouvres
+  // (comportement actuel, inchange). true = tous les jours du calendrier
+  // comptent (weekends et feries inclus), voir LeaveTypeService et
+  // LeaveRequestService.computeWorkingDays.
+  @IsOptional()
+  @IsBoolean()
+  CountCalendarDays?: boolean;
+
   // Ne correspond à aucune colonne LeaveType — déclenche, une fois le type
   // créé, un crédit rétroactif aux employés déjà actifs (mois en cours si
   // accumulation mensuelle, année complète sinon). Voir LeaveTypeService.create.

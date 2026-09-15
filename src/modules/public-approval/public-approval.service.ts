@@ -75,7 +75,7 @@ export class PublicApprovalService {
       referenceCode = lr.ReferenceCode;
       summary = lr.leaveType?.Name ?? 'congé';
       details = [
-        { label: 'Type de congé', value: lr.leaveType?.Name ?? '—' },
+        { label: 'Type de congé', value: lr.leaveType?.Name ?? '-' },
         { label: 'Du', value: formatDateFr(lr.StartDate) },
         { label: 'Au', value: formatDateFr(lr.EndDate) },
         { label: 'Durée', value: `${Number(lr.DaysCount)} jour(s)` },
@@ -131,7 +131,7 @@ export class PublicApprovalService {
       throw new NotFoundException('Type de demande inconnu pour ce lien');
     }
     if (decision.Decision !== 'Pending') {
-      throw new BadRequestException('Cette demande a déjà été traitée — le lien reçu par email ne peut servir qu\'une fois');
+      throw new BadRequestException("Cette demande a déjà été traitée : le lien reçu par email ne peut servir qu'une fois");
     }
     if ((dto.Decision === 'Rejected' || dto.Decision === 'Returned') && (!dto.Comment || dto.Comment.trim().length === 0)) {
       throw new BadRequestException('Un commentaire est requis pour refuser ou retourner une demande');

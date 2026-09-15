@@ -372,7 +372,7 @@ export class ExpenseReportService {
     const pool = await this.approvalPoolService.findApplicablePool(employee.OrganizationUnitId, 'ExpenseReport');
     if (!pool) {
       throw new NotFoundException(
-        "Aucun pool de validation de note de frais n'est configuré pour cette unité ou ses parents — contactez le RH",
+        "Aucun pool de validation de note de frais n'est configuré dans l'entité à laquelle appartient cet employé (ni dans une entité parente) : contactez le RH",
       );
     }
     const sortedMembers = pool.members.slice().sort((a, b) => a.StepOrder - b.StepOrder);

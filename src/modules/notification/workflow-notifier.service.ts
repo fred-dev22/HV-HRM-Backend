@@ -156,7 +156,7 @@ export class WorkflowNotifierService {
       this.resolvePerson(approverId),
     ]);
     const title = 'Nouvelle demande à valider';
-    const message = `${beneficiary.name} — ${ctx.summary} en attente de votre validation`;
+    const message = `${beneficiary.name} : ${ctx.summary} en attente de votre validation`;
     await Promise.all([
       this.notifyPeople([approver], { type: ctx.kind, title, message, href: hrefToValidate(ctx) }),
       this.mail.send({
@@ -182,7 +182,7 @@ export class WorkflowNotifierService {
       this.resolvePerson(nextApproverId),
     ]);
     const title = 'Nouvelle demande à valider';
-    const message = `${beneficiary.name} — ${ctx.summary} en attente de votre validation`;
+    const message = `${beneficiary.name} : ${ctx.summary} en attente de votre validation`;
     await Promise.all([
       this.notifyPeople([nextApprover], { type: ctx.kind, title, message, href: hrefToValidate(ctx) }),
       this.mail.send({

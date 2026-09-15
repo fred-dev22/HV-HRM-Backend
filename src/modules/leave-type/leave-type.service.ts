@@ -4,6 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateLeaveTypeDto } from './dto/create-leave-type.dto';
 import { UpdateLeaveTypeDto } from './dto/update-leave-type.dto';
 import { LeaveTransactionService } from '../leave-transaction/leave-transaction.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { bulkImport } from '../../common/utils/bulk-import.util';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class LeaveTypeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly leaveTransactionService: LeaveTransactionService,
+    private readonly realtime: RealtimeGateway,
   ) {}
 
   async create(dto: CreateLeaveTypeDto, createdBy: string) {
@@ -30,6 +32,12 @@ export class LeaveTypeService {
         });
     }
 
+    // Sans ça, un employé dont le formulaire "Nouvelle demande d'absence"
+    // était déjà ouvert (leaveTypesStore chargé une fois, jamais reinterrogé,
+    // voir AbsenceCreate.vue) ne voyait jamais le nouveau type tant qu'il ne
+    // rechargeait pas la page à la main (retour client du 09/09) — même
+    // mécanisme que data:changed sur employee/leave/mission/expense.
+    this.realtime.broadcastCompany('data:changed', { domain: 'leaveType' });
     return leaveType;
   }
 
@@ -61,18 +69,22 @@ export class LeaveTypeService {
     // CreditExistingEmployees n'est pas une colonne LeaveType (voir create
     // ci-dessus) — n'a de sens qu'à la création, ignoré silencieusement ici.
     const { CreditExistingEmployees: _ignored, ...data } = dto;
-    return this.prisma.leaveType.update({
+    const updated = await this.prisma.leaveType.update({
       where: { Id: id },
       data: { ...data, ModifiedBy: modifiedBy, ModifiedAt: new Date() },
     });
+    this.realtime.broadcastCompany('data:changed', { domain: 'leaveType' });
+    return updated;
   }
 
   async toggleActive(id: string, modifiedBy: string) {
     const leaveType = await this.findOne(id);
-    return this.prisma.leaveType.update({
+    const updated = await this.prisma.leaveType.update({
       where: { Id: id },
       data: { IsActive: !leaveType.IsActive, ModifiedBy: modifiedBy, ModifiedAt: new Date() },
     });
+    this.realtime.broadcastCompany('data:changed', { domain: 'leaveType' });
+    return updated;
   }
 
   // EmployeeLeaveBalance/LeaveTransaction pointent vers LeaveTypeId en
@@ -89,15 +101,17 @@ export class LeaveTypeService {
     const leaveType = await this.findOne(id);
     if (leaveType.IsSystem) {
       throw new ForbiddenException(
-        'Ce type de congé est fourni par défaut et ne peut pas être supprimé — désactivez-le à la place',
+        'Ce type de congé est fourni par défaut et ne peut pas être supprimé : désactivez-le à la place',
       );
     }
     try {
-      return await this.prisma.leaveType.delete({ where: { Id: id } });
+      const removed = await this.prisma.leaveType.delete({ where: { Id: id } });
+      this.realtime.broadcastCompany('data:changed', { domain: 'leaveType' });
+      return removed;
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
         throw new ConflictException(
-          'Ce type de congé a des demandes de congé associées — désactivez-le plutôt que de le supprimer.',
+          'Ce type de congé a des demandes de congé associées, désactivez-le plutôt que de le supprimer.',
         );
       }
       throw err;

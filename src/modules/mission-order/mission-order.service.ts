@@ -231,7 +231,7 @@ export class MissionOrderService {
     }
     if (!employee.EmployeeCategoryId) {
       throw new BadRequestException(
-        "Cet employé n'a pas de catégorie de frais assignée — contactez le RH avant de créer un ordre de mission",
+        "Cet employé n'a pas de catégorie de frais assignée : contactez le RH avant de créer un ordre de mission",
       );
     }
 
@@ -584,7 +584,7 @@ export class MissionOrderService {
     const pool = await this.approvalPoolService.findApplicablePool(employee.OrganizationUnitId, 'Mission');
     if (!pool) {
       throw new NotFoundException(
-        "Aucun pool de validation de mission n'est configuré pour cette unité ou ses parents — contactez le RH",
+        "Aucun pool de validation de mission n'est configuré dans l'entité à laquelle appartient cet employé (ni dans une entité parente) : contactez le RH",
       );
     }
     const sortedMembers = pool.members.slice().sort((a, b) => a.StepOrder - b.StepOrder);

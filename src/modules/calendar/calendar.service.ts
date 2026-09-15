@@ -153,7 +153,7 @@ export class CalendarService {
     const calendar = await this.findOne(id);
     if (calendar.IsDefault) {
       throw new BadRequestException(
-        'Le calendrier par défaut ne peut pas être supprimé — définissez-en un autre comme défaut d\'abord',
+        'Le calendrier par défaut ne peut pas être supprimé : définissez-en un autre comme défaut d\'abord',
       );
     }
     // CalendarWorkDay.calendar est onDelete: NoAction (contrainte SQL Server,

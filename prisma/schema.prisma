@@ -48,6 +48,16 @@ model OrganizationUnit {
   Email           String? @db.NVarChar(150)
   // Status: Draft | PendingApproval | Active | Inactive
   Status          String  @db.NVarChar(20)
+  // LeaveApprovalMode: Pool | DirectValidator (retour client du 09/09) — les
+  // deux mecanismes de validation des conges de cette entite (pool par
+  // entite vs validateur direct par employe, voir Employee.DirectValidatorId)
+  // sont mutuellement exclusifs, jamais actifs en meme temps pour les memes
+  // employes. 'Pool' par defaut = comportement historique inchange pour
+  // toute entite existante. Change via un endpoint dedie
+  // (PATCH /organization-units/:id/leave-approval-mode), pas le PATCH
+  // generique — evite de repasser l'entite en PendingApproval pour un simple
+  // changement de regle de validation (voir update() dans le service).
+  LeaveApprovalMode String @default("Pool") @db.NVarChar(20)
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
@@ -202,6 +212,16 @@ model Employee {
   // gerable normalement partout ou l'admin le cherche explicitement par nom.
   IsSystem     Boolean @default(false)
 
+  // Validateur direct (demande client, retour du 08/09) : bascule le
+  // workflow de validation de conge de cet employe sur UN validateur unique
+  // et fixe, au lieu du pool par entite (ApprovalPool/ApprovalPoolMember) —
+  // pense pour les organisations sans hierarchie a plusieurs niveaux. null
+  // (par defaut) = comportement inchange, pool par entite. Voir
+  // LeaveRequestService.routeToApproval/routeToDirectValidator. Un employe
+  // peut etre son propre validateur direct (rare, ex: aucun niveau
+  // au-dessus) : traite comme auto-approbation, meme regle que pour le pool.
+  DirectValidatorId String? @db.UniqueIdentifier
+
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier
@@ -213,6 +233,8 @@ model Employee {
 
   position         Position?         @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   organizationUnit OrganizationUnit  @relation("EmployeeOrganizationUnit", fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  directValidator  Employee?         @relation("EmployeeDirectValidator", fields: [DirectValidatorId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  directValidatorFor Employee[]      @relation("EmployeeDirectValidator")
   user             User?             @relation(fields: [UserId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   employeeCategory EmployeeCategory? @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -241,6 +263,7 @@ model Employee {
 
   approvalDecisionsValidated ApprovalDecision[] @relation("ApprovalDecisionValidatedBy")
   approvalDecisionsCreated   ApprovalDecision[] @relation("ApprovalDecisionCreatedBy")
+  approvalDecisionsAsDirectValidator ApprovalDecision[] @relation("ApprovalDecisionDirectValidator")
 
   companySettingsModified CompanySettings[] @relation("CompanySettingsModifiedBy")
 
@@ -333,6 +356,7 @@ model Employee {
   @@index([PositionId])
   @@index([OrganizationUnitId])
   @@index([EmployeeCategoryId])
+  @@index([DirectValidatorId])
   // Rappels d'echeances (backlog) : fins de CDD / stage sur une periode
   @@index([ContractType, TerminationDate])
 }
@@ -520,7 +544,14 @@ model ApprovalDecision {
   // ID de la demande concernee (LeaveRequest, MissionOrder ou ExpenseReport
   // selon EntityType) — reference polymorphique, pas de FK Prisma.
   EntityId              String    @db.UniqueIdentifier
-  ApprovalPoolMemberId  String    @db.UniqueIdentifier
+  // Nullable depuis l'ajout du validateur direct (Employee.DirectValidatorId,
+  // retour client du 08/09) : une decision vient SOIT d'un niveau de pool
+  // (ApprovalPoolMemberId rempli), SOIT d'un validateur direct
+  // (DirectValidatorEmployeeId rempli ci-dessous) — jamais les deux, jamais
+  // aucun des deux. Voir LeaveRequestService.routeToApproval/
+  // routeToDirectValidator/approve/assertIsCurrentApprover.
+  ApprovalPoolMemberId  String?   @db.UniqueIdentifier
+  DirectValidatorEmployeeId String? @db.UniqueIdentifier
   ValidatedByEmployeeId String    @db.UniqueIdentifier
   StepOrder             Int
   // Decision: Pending | Approved | Rejected | Returned
@@ -541,13 +572,15 @@ model ApprovalDecision {
   CreatedBy String   @db.UniqueIdentifier
   CreatedAt DateTime @default(now()) @db.DateTime2
 
-  approvalPoolMember ApprovalPoolMember @relation(fields: [ApprovalPoolMemberId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  approvalPoolMember ApprovalPoolMember? @relation(fields: [ApprovalPoolMemberId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  directValidatorEmployee Employee? @relation("ApprovalDecisionDirectValidator", fields: [DirectValidatorEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   validatedByEmployee Employee @relation("ApprovalDecisionValidatedBy", fields: [ValidatedByEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   createdByEmployee   Employee @relation("ApprovalDecisionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([EntityType, EntityId])
   @@index([ApprovalPoolMemberId])
+  @@index([DirectValidatorEmployeeId])
   @@index([ValidatedByEmployeeId])
   @@index([Token])
 }
@@ -697,6 +730,16 @@ model LeaveType {
   AppliesToGender      String?  @db.NVarChar(5)
   AppliesToExpatriate  Boolean?
   OrganizationUnitId   String?  @db.UniqueIdentifier
+
+  // Decompte calendaire (retour client, 08/09) : false (par defaut) = jours
+  // ouvres, le comportement actuel (weekends/feries exclus, regle du
+  // week-end avale pour un local, voir computeWorkingDays). true = TOUS les
+  // jours du calendrier comptent (weekends et feries inclus), utile pour un
+  // type comme Convalescence Maladie ou l'arret couvre des jours calendaires
+  // et non des jours travailles. Voir leave-request.service.ts
+  // computeWorkingDays (backend, source de verite) et utils/calendar.ts
+  // chargedWorkingDays (frontend, apercu) qui doivent rester en miroir.
+  CountCalendarDays    Boolean  @default(false)
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2

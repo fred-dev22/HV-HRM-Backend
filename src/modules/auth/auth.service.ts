@@ -158,7 +158,7 @@ export class AuthService {
           `Bonjour,`,
           `Une demande de réinitialisation a été faite pour le compte associé à cet email (${user.Username}).`,
           `Cliquez sur le bouton ci-dessous pour choisir un nouveau mot de passe. Ce lien expire dans 1 heure.`,
-          `Si vous n'êtes pas à l'origine de cette demande, ignorez cet email — votre mot de passe actuel reste inchangé.`,
+          `Si vous n'êtes pas à l'origine de cette demande, ignorez cet email : votre mot de passe actuel reste inchangé.`,
         ],
         ctaLabel: 'Réinitialiser mon mot de passe',
         ctaHref: resetUrl,

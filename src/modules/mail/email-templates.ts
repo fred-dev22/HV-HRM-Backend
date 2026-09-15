@@ -173,7 +173,7 @@ export function renderEmailHtml(opts: EmailOptions): string {
             </tr>
             <tr>
               <td style="padding:16px 28px 22px;border-top:1px solid ${COLORS.border};margin-top:8px;">
-                <p style="margin:0;font-size:11px;color:${COLORS.muted};">Productive 247 HRM — HV. Cet email est généré automatiquement, merci de ne pas y répondre directement.</p>
+                <p style="margin:0;font-size:11px;color:${COLORS.muted};">Productive 247 HRM - HV. Cet email est généré automatiquement, merci de ne pas y répondre directement.</p>
               </td>
             </tr>
           </table>

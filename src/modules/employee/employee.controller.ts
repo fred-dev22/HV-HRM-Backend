@@ -10,6 +10,7 @@ import {
 import { EmployeeService } from './employee.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
+import { AssignDirectValidatorDto } from './dto/assign-direct-validator.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CurrentPermissions } from '../../common/decorators/current-permissions.decorator';
@@ -30,6 +31,24 @@ export class EmployeeController {
   @RequirePermission('EMPLOYE_CREER')
   bulkCreate(@Body() dto: BulkImportDto, @CurrentUser('employeeId') employeeId: string) {
     return this.service.bulkCreate(dto.items, employeeId);
+  }
+
+  // Assignation du validateur direct — utilise par l'import CSV en masse
+  // (Configuration, voir AssignDirectValidatorDto). Delegue a update() (meme
+  // permission, meme logique/audit) plutot qu'une methode dediee — un DTO
+  // separe existe seulement parce que le wizard d'import generique appelle
+  // toujours un POST une fois par ligne, jamais un PATCH parametre par id.
+  @Post('assign-direct-validator')
+  @RequirePermission('EMPLOYE_MODIFIER')
+  assignDirectValidator(
+    @Body() dto: AssignDirectValidatorDto,
+    @CurrentUser('employeeId') employeeId: string,
+  ) {
+    return this.service.update(
+      dto.EmployeeId,
+      { DirectValidatorId: dto.DirectValidatorId },
+      employeeId,
+    );
   }
 
   @Get()

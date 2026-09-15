@@ -73,7 +73,7 @@ export async function bulkImport<TDto extends object>(
       const fields = validationErrors.map((e) => e.property);
       const message =
         fields.length > 0
-          ? `Ligne invalide : champ(s) manquant(s) ou incorrect(s) — ${fields.join(', ')}.`
+          ? `Ligne invalide : champ(s) manquant(s) ou incorrect(s) (${fields.join(', ')}).`
           : 'Ligne invalide.';
       result.failed++;
       result.errors.push({ index: i, message });

@@ -84,7 +84,7 @@ export class LeaveRequestService {
       creatorId: lr.CreatedBy,
       summary: lr.leaveType?.Name ?? 'congé',
       details: [
-        { label: 'Type de congé', value: lr.leaveType?.Name ?? '—' },
+        { label: 'Type de congé', value: lr.leaveType?.Name ?? '-' },
         { label: 'Du', value: formatDateFr(lr.StartDate) },
         { label: 'Au', value: formatDateFr(lr.EndDate) },
         { label: 'Durée', value: `${Number(lr.DaysCount)} jour(s)` },
@@ -178,6 +178,7 @@ export class LeaveRequestService {
     isExpatriate = false,
     startPeriod = 'full',
     endPeriod = 'full',
+    countCalendarDays = false,
   ): Promise<number> {
     if (endDate < startDate) {
       throw new BadRequestException(
@@ -185,10 +186,40 @@ export class LeaveRequestService {
       );
     }
 
+    const sameDay = (a: Date, b: Date) =>
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+
+    // Vrai si `date` est une absence complete au sens de la demande — seuls
+    // StartDate/EndDate peuvent porter une demi-journee (StartPeriod/
+    // EndPeriod != 'full'), tout jour strictement entre les deux est
+    // forcement une absence complete.
+    const isFullyAbsent = (date: Date): boolean => {
+      if (sameDay(date, startDate) && startPeriod !== 'full') return false;
+      if (sameDay(date, endDate) && endPeriod !== 'full') return false;
+      return true;
+    };
+
+    // Decompte calendaire (LeaveType.CountCalendarDays, retour client du
+    // 08/09) : tous les jours comptent, weekends et feries inclus — pas de
+    // notion de jour ouvre ici, donc ni le calendrier hebdomadaire ni les
+    // feries ne sont consultes, et la regle du week-end avale (voir plus bas)
+    // ne s'applique pas non plus (un weekend est deja compte normalement).
+    if (countCalendarDays) {
+      let count = 0;
+      const cur = new Date(startDate);
+      while (cur <= endDate) {
+        count += isFullyAbsent(cur) ? 1 : 0.5;
+        cur.setDate(cur.getDate() + 1);
+      }
+      return count;
+    }
+
     const calendar = await this.resolveApplicableCalendar(employeeCategoryId);
     if (!calendar) {
       throw new BadRequestException(
-        "Aucun calendrier par défaut n'est configuré — contactez le RH",
+        "Aucun calendrier par défaut n'est configuré : contactez le RH",
       );
     }
 
@@ -227,21 +258,6 @@ export class LeaveRequestService {
           hd.getUTCDate() === date.getDate()
         );
       });
-    };
-
-    const sameDay = (a: Date, b: Date) =>
-      a.getFullYear() === b.getFullYear() &&
-      a.getMonth() === b.getMonth() &&
-      a.getDate() === b.getDate();
-
-    // Vrai si `date` est une absence complete au sens de la demande — seuls
-    // StartDate/EndDate peuvent porter une demi-journee (StartPeriod/
-    // EndPeriod != 'full'), tout jour strictement entre les deux est
-    // forcement une absence complete.
-    const isFullyAbsent = (date: Date): boolean => {
-      if (sameDay(date, startDate) && startPeriod !== 'full') return false;
-      if (sameDay(date, endDate) && endPeriod !== 'full') return false;
-      return true;
     };
 
     let count = 0;
@@ -367,6 +383,17 @@ export class LeaveRequestService {
     if (!employee) {
       throw new NotFoundException(`Employé ${employeeId} introuvable`);
     }
+    // Retour client du 09/09 : un employe sans entite rattachee ne peut pas
+    // creer de demande de conge du tout (ni pool ni validateur direct ne
+    // peuvent alors etre resolus, voir routeToApproval). OrganizationUnitId
+    // est requis en base et a la creation/edition de la fiche employe — ce
+    // cas ne devrait jamais survenir via l'app, ce garde-fou couvre les
+    // donnees historiques ou une entite retiree hors de l'app.
+    if (!employee.OrganizationUnitId) {
+      throw new BadRequestException(
+        "Cet employé n'appartient à aucune entité : contactez le RH pour le rattacher à une entité avant de créer une demande de congé",
+      );
+    }
 
     const leaveType = await this.prisma.leaveType.findUnique({
       where: { Id: dto.LeaveTypeId },
@@ -389,6 +416,7 @@ export class LeaveRequestService {
       employee.IsExpatriate,
       startPeriod,
       endPeriod,
+      leaveType.CountCalendarDays,
     );
     if (daysCount <= 0) {
       throw new BadRequestException(
@@ -448,10 +476,26 @@ export class LeaveRequestService {
     const endPeriod = dto.EndPeriod ?? existing.EndPeriod;
 
     let daysCount = existing.DaysCount;
-    if (dto.StartDate || dto.EndDate || dto.StartPeriod || dto.EndPeriod) {
-      const employee = await this.prisma.employee.findUniqueOrThrow({
-        where: { Id: existing.EmployeeId },
-      });
+    // Recalcule aussi si seul le type change (pas seulement les dates/
+    // periodes) — necessaire depuis l'ajout du decompte calendaire
+    // (LeaveType.CountCalendarDays) : deux types peuvent avoir un mode de
+    // decompte different, changer de type doit donc redeclencher le calcul
+    // meme si les dates restent identiques.
+    if (
+      dto.StartDate ||
+      dto.EndDate ||
+      dto.StartPeriod ||
+      dto.EndPeriod ||
+      dto.LeaveTypeId
+    ) {
+      const [employee, leaveType] = await Promise.all([
+        this.prisma.employee.findUniqueOrThrow({
+          where: { Id: existing.EmployeeId },
+        }),
+        this.prisma.leaveType.findUniqueOrThrow({
+          where: { Id: leaveTypeId },
+        }),
+      ]);
       daysCount = (await this.computeWorkingDays(
         startDate,
         endDate,
@@ -460,6 +504,7 @@ export class LeaveRequestService {
         employee.IsExpatriate,
         startPeriod,
         endPeriod,
+        leaveType.CountCalendarDays,
       )) as unknown as typeof existing.DaysCount;
     }
 
@@ -690,9 +735,25 @@ export class LeaveRequestService {
     const now = new Date();
     const result: typeof inApproval = [];
     for (const lr of inApproval) {
+      if (!lr.ApprovalPoolId) {
+        // Validateur direct (pas de pool) : le validateur courant est celui
+        // de l'ApprovalDecision Pending de cette etape, pas d'interim en v1.
+        const decision = await this.prisma.approvalDecision.findFirst({
+          where: {
+            EntityType: 'LeaveRequest',
+            EntityId: lr.Id,
+            StepOrder: lr.CurrentApprovalStep as number,
+            Decision: 'Pending',
+          },
+        });
+        if (decision?.DirectValidatorEmployeeId === employeeId) {
+          result.push(lr);
+        }
+        continue;
+      }
       const member = await this.prisma.approvalPoolMember.findFirst({
         where: {
-          ApprovalPoolId: lr.ApprovalPoolId as string,
+          ApprovalPoolId: lr.ApprovalPoolId,
           StepOrder: lr.CurrentApprovalStep as number,
         },
       });
@@ -777,7 +838,7 @@ export class LeaveRequestService {
         existing.EndDate,
         undefined,
         (code) =>
-          `L'intérimaire désigné est lui-même absent sur cette période (${code}) — choisissez quelqu'un d'autre ou ajustez les dates`,
+          `L'intérimaire désigné est lui-même absent sur cette période (${code}) : choisissez quelqu'un d'autre ou ajustez les dates`,
       );
     }
 
@@ -828,9 +889,86 @@ export class LeaveRequestService {
     });
   }
 
+  // Validateur direct (Employee.DirectValidatorId) : toujours un seul niveau
+  // (StepOrder 1), jamais de pool ni de N+2/N+3/N+4 — ApprovalPoolId reste
+  // null (voir routeToApproval, qui aiguille ici en amont). Si le validateur
+  // designe est le beneficiaire lui-meme (rare, ex: aucun niveau au-dessus),
+  // auto-approbation immediate, meme traitement que le dernier niveau d'un
+  // pool classique qui resolvait au demandeur (voir plus bas, cas symetrique).
+  private async routeToDirectValidator(
+    leaveRequest: Awaited<ReturnType<LeaveRequestService['findOneRaw']>>,
+    directValidatorId: string,
+    requesterEmployeeId: string,
+  ) {
+    if (directValidatorId === leaveRequest.EmployeeId) {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.leaveRequest.update({
+          where: { Id: leaveRequest.Id },
+          data: {
+            Status: 'Approved',
+            ApprovalPoolId: null,
+            RejectionReason: null,
+            ModifiedBy: requesterEmployeeId,
+            ModifiedAt: new Date(),
+          },
+          include: LEAVE_REQUEST_INCLUDE,
+        });
+        await this.leaveTransactionService.adjustBalance(
+          leaveRequest.EmployeeId,
+          leaveRequest.LeaveTypeId,
+          Number(leaveRequest.DaysCount),
+          'Consumption',
+          requesterEmployeeId,
+          leaveRequest.Id,
+          tx,
+        );
+        return updated;
+      });
+      await this.notifier.notifyApproved(this.toContext(leaveRequest), {
+        autoApproved: true,
+      });
+      return updated;
+    }
+
+    const token = generateApprovalToken();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.leaveRequest.update({
+        where: { Id: leaveRequest.Id },
+        data: {
+          Status: 'InApprovalN1',
+          ApprovalPoolId: null,
+          CurrentApprovalStep: 1,
+          RejectionReason: null,
+          ModifiedBy: requesterEmployeeId,
+          ModifiedAt: new Date(),
+        },
+        include: LEAVE_REQUEST_INCLUDE,
+      });
+      await tx.approvalDecision.create({
+        data: {
+          EntityType: 'LeaveRequest',
+          EntityId: leaveRequest.Id,
+          DirectValidatorEmployeeId: directValidatorId,
+          ValidatedByEmployeeId: directValidatorId,
+          StepOrder: 1,
+          Decision: 'Pending',
+          CreatedBy: requesterEmployeeId,
+          Token: token,
+        },
+      });
+      return updated;
+    });
+    await this.notifier.notifySubmitted(
+      this.toContext(leaveRequest),
+      directValidatorId,
+      token,
+    );
+    return updated;
+  }
+
   private async routeToApproval(
     leaveRequest: Awaited<ReturnType<LeaveRequestService['findOneRaw']>>,
-    employee: { OrganizationUnitId: string },
+    employee: { OrganizationUnitId: string; DirectValidatorId: string | null },
     leaveType: { Id: string; DaysPerYear: unknown; MinNoticeDays: number },
     requesterEmployeeId: string,
   ) {
@@ -845,13 +983,38 @@ export class LeaveRequestService {
     // connaissance de cause. La consommation reste plafonnee a 0 par
     // adjustBalance (jamais de solde negatif en base), voir approve().
 
+    // Validateur direct (Employee.DirectValidatorId) vs pool par entite : le
+    // choix suit STRICTEMENT OrganizationUnit.LeaveApprovalMode de l'entite
+    // de l'employe (retour client du 09/09), jamais la simple presence de
+    // DirectValidatorId sur l'employe — sinon rebasculer une entite de
+    // "Validateur direct" vers "Pool" ne suffirait pas a arreter le routage
+    // par employe tant que le champ reste renseigne (bascule fantome). Les
+    // deux mecanismes sont mutuellement exclusifs pour une entite donnee,
+    // jamais actifs en meme temps (voir ApprovalPoolConfig.vue).
+    const unit = await this.prisma.organizationUnit.findUnique({
+      where: { Id: employee.OrganizationUnitId },
+      select: { LeaveApprovalMode: true },
+    });
+    if (unit?.LeaveApprovalMode === 'DirectValidator') {
+      if (!employee.DirectValidatorId) {
+        throw new NotFoundException(
+          "Aucun validateur direct n'est configuré pour cet employé : contactez le RH",
+        );
+      }
+      return this.routeToDirectValidator(
+        leaveRequest,
+        employee.DirectValidatorId,
+        requesterEmployeeId,
+      );
+    }
+
     const pool = await this.approvalPoolService.findApplicablePool(
       employee.OrganizationUnitId,
       'Leave',
     );
     if (!pool) {
       throw new NotFoundException(
-        "Aucun pool de validation de congé n'est configuré pour cette unité ou ses parents — contactez le RH",
+        "Aucun pool de validation de congé n'est configuré dans l'entité à laquelle appartient cet employé (ni dans une entité parente) : contactez le RH",
       );
     }
     const sortedMembers = pool.members
@@ -960,13 +1123,32 @@ export class LeaveRequestService {
     canOverride: boolean,
   ) {
     if (canOverride) return;
-    if (
-      !leaveRequest.ApprovalPoolId ||
-      leaveRequest.CurrentApprovalStep == null
-    ) {
+    if (leaveRequest.CurrentApprovalStep == null) {
       throw new ForbiddenException(
         "Cette demande n'est pas en attente de validation",
       );
+    }
+    // Validateur direct (pas de pool, ApprovalPoolId null) : le validateur
+    // courant est celui de l'ApprovalDecision Pending de cette etape — pas
+    // d'interim en v1, comparaison directe.
+    if (!leaveRequest.ApprovalPoolId) {
+      const decision = await this.prisma.approvalDecision.findFirst({
+        where: {
+          EntityType: 'LeaveRequest',
+          EntityId: leaveRequest.Id,
+          StepOrder: leaveRequest.CurrentApprovalStep,
+          Decision: 'Pending',
+        },
+      });
+      if (
+        !decision ||
+        decision.DirectValidatorEmployeeId !== approverEmployeeId
+      ) {
+        throw new ForbiddenException(
+          "Vous n'êtes pas le validateur actuel de cette demande",
+        );
+      }
+      return;
     }
     const member = await this.prisma.approvalPoolMember.findFirst({
       where: {
@@ -1012,20 +1194,28 @@ export class LeaveRequestService {
       );
     }
 
-    const pool = await this.prisma.approvalPool.findUniqueOrThrow({
-      where: { Id: existing.ApprovalPoolId as string },
-      include: { members: true },
-    });
-    // Le demandeur original (pas l'approbateur courant) est la referance a
-    // eviter — si les niveaux restants resolvent tous a lui, la demande
-    // passe directement en Approuve plutot que de rester bloquee.
-    const remainingMembers = pool.members
-      .filter((m) => m.StepOrder > (existing.CurrentApprovalStep as number))
-      .sort((a, b) => a.StepOrder - b.StepOrder);
-    const applicable = await this.findApplicableStep(
-      remainingMembers,
-      existing.EmployeeId,
-    );
+    // Validateur direct (ApprovalPoolId null) : toujours un seul niveau,
+    // jamais de niveau suivant — applicable reste undefined, va direct au
+    // bloc Approuve ci-dessous (meme chemin que "derniers niveaux d'un pool
+    // tous resolus au demandeur").
+    const applicable = existing.ApprovalPoolId
+      ? await (async () => {
+          const pool = await this.prisma.approvalPool.findUniqueOrThrow({
+            where: { Id: existing.ApprovalPoolId as string },
+            include: { members: true },
+          });
+          // Le demandeur original (pas l'approbateur courant) est la
+          // referance a eviter — si les niveaux restants resolvent tous a
+          // lui, la demande passe directement en Approuve plutot que de
+          // rester bloquee.
+          const remainingMembers = pool.members
+            .filter(
+              (m) => m.StepOrder > (existing.CurrentApprovalStep as number),
+            )
+            .sort((a, b) => a.StepOrder - b.StepOrder);
+          return this.findApplicableStep(remainingMembers, existing.EmployeeId);
+        })()
+      : undefined;
     const nextToken = applicable ? generateApprovalToken() : null;
 
     const result = await this.prisma.$transaction(async (tx) => {
