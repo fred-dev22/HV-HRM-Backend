@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
 
 // Upload de fichiers vers SharePoint via Microsoft Graph — meme pattern que
 // mail.service.ts : flux client-credentials pur fetch, pas de SDK
@@ -86,10 +88,46 @@ export class SharePointService {
     return this.cachedDrive;
   }
 
+  private isConfigured(): boolean {
+    return !!(
+      process.env.GRAPH_SHAREPOINT_TENANT_ID &&
+      process.env.GRAPH_SHAREPOINT_CLIENT_ID &&
+      process.env.GRAPH_SHAREPOINT_CLIENT_SECRET &&
+      process.env.GRAPH_SHAREPOINT_SITE_HOST &&
+      process.env.GRAPH_SHAREPOINT_SITE_PATH
+    );
+  }
+
+  // Depot local de secours (dossier /uploads a la racine du backend, servi
+  // par UploadsController) quand SharePoint n'est pas configure — evite que
+  // TOUT depot de fichier (CV candidat, piece jointe RH...) echoue purement
+  // et simplement sur une instance ou le tenant Graph/SharePoint du client
+  // n'a pas encore ete mis en place (cas HV au 15/09 : GRAPH_SHAREPOINT_*
+  // vides). Meme convention de nommage que l'upload SharePoint (prefixe
+  // UUID court) pour rester coherent et eviter les collisions.
+  private async uploadFileLocally(
+    originalName: string,
+    buffer: Buffer,
+    mimeType: string,
+  ): Promise<{ url: string; size: number }> {
+    this.logger.warn(
+      `SharePoint non configure (GRAPH_SHAREPOINT_*) : "${originalName}" (${mimeType}) enregistre localement dans /uploads au lieu de SharePoint.`,
+    );
+    const safeName = `${randomUUID().slice(0, 8)}-${originalName}`.replace(/[#%{}\\~[\]/]/g, '_');
+    const dir = join(process.cwd(), 'uploads');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, safeName), buffer);
+    const base = (process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT ?? 3000}/api`).replace(/\/$/, '');
+    return { url: `${base}/uploads/${encodeURIComponent(safeName)}`, size: buffer.length };
+  }
+
   // Prefixe le nom de fichier par un UUID court pour eviter toute collision
   // entre deux uploads du meme fichier (deux notes de frais avec un "photo.jpg"
   // chacune, par ex.) — le nom d'origine reste lisible dans SharePoint.
   async uploadFile(originalName: string, buffer: Buffer, mimeType: string): Promise<{ url: string; size: number }> {
+    if (!this.isConfigured()) {
+      return this.uploadFileLocally(originalName, buffer, mimeType);
+    }
     const { siteId, driveId } = await this.resolveDrive();
     const token = await this.getAccessToken();
     const uploadPath = process.env.GRAPH_SHAREPOINT_UPLOAD_PATH ?? 'Shared Documents';

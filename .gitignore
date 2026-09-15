@@ -7,6 +7,10 @@
 # Fichiers d'exemple pour tester l'import CSV/Excel en local — pas destines au repo
 /import-samples
 
+# Depot local de secours quand SharePoint n'est pas configure (voir
+# sharepoint.service.ts) — jamais destine au repo, propre a chaque environnement.
+/uploads
+
 # Logs
 logs
 *.log
