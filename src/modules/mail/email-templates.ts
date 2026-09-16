@@ -3,9 +3,26 @@ import { join } from 'path';
 
 // Logo HV embarque en base64 (evite toute dependance a une image
 // hebergee publiquement — Outlook/OWA en particulier bloque volontiers les
-// images externes par defaut, alors qu'une image inline (data URI) s'affiche
-// toujours). Fichier .txt a cote de ce module, copie automatiquement dans
-// dist/ par Nest (assets non-.ts).
+// images externes par defaut). Fichier .txt a cote de ce module, copie
+// automatiquement dans dist/ par Nest (assets non-.ts).
+//
+// ISSUE CONNUE (15-16/09) : un <img src="data:..."> comme ci-dessous
+// s'affiche bien sur Outlook mais Gmail (web + appli mobile) retire les
+// images en data URI du HTML recu, par mesure anti-spam — logo absent sur
+// Gmail. Tentative de fix : logo en piece jointe inline (Content-ID) +
+// <img src="cid:...">, seule technique fiable sur Gmail ET Outlook en
+// theorie. ECHEC EN CONDITIONS REELLES : verifie par test (16/09) que
+// l'appel Graph POST /sendMail en un seul coup perd le contenu de la piece
+// jointe inline en route (Graph rapporte bien la bonne taille cote
+// destinataire, mais le corps de la piece jointe arrive vide — aucun
+// client, ni Gmail ni Outlook, ne peut donc l'afficher). Le contournement
+// standard (creer le message en brouillon PUIS l'envoyer, POST /messages
+// + POST /messages/{id}/send) fonctionne mais necessite le scope
+// applicatif Mail.ReadWrite cote Azure AD/Entra, que cette app n'a pas
+// aujourd'hui (seulement Mail.Send) — voir mail.service.ts, deja pret a
+// basculer sur ce chemin fiable des que le scope sera accorde.
+// EN ATTENDANT : revenu au data URI (marche sur Outlook, pas sur Gmail —
+// c'etait deja le cas avant cette investigation, pas une regression).
 const HV_LOGO_BASE64 = readFileSync(join(__dirname, 'hv-logo-base64.txt'), 'utf-8').trim();
 
 // Palette alignee sur src/assets/main.css du frontend (theme "Rouge HV").
@@ -151,7 +168,16 @@ export function renderEmailHtml(opts: EmailOptions): string {
                 <table role="presentation" cellpadding="0" cellspacing="0">
                   <tr>
                     <td style="padding-right:12px;">
-                      <img src="data:image/png;base64,${HV_LOGO_BASE64}" width="94" height="28" alt="HV" style="display:block;" />
+                      <!-- Plaque blanche derriere le logo : le trait du logo est
+                           quasiment le meme rouge que ce bandeau (${COLORS.primary}),
+                           invisible dessus sans ce fond clair. -->
+                      <table role="presentation" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:6px;">
+                        <tr>
+                          <td style="padding:5px 8px;">
+                            <img src="data:image/png;base64,${HV_LOGO_BASE64}" width="76" height="23" alt="HV" style="display:block;" />
+                          </td>
+                        </tr>
+                      </table>
                     </td>
                     <td>
                       <span style="color:#ffffff;font-size:16px;font-weight:700;">Productive 247 <span style="font-weight:400;opacity:.85;">HRM</span></span><br/>
