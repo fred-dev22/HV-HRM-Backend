@@ -4,6 +4,7 @@ import {
   GenerateContractDto,
   UpdateContractDto,
   NegotiateContractDto,
+  AcceptContractDto,
   RefuseContractDto,
   ContractTemplateDto,
   UpdateContractTemplateDto,
@@ -97,8 +98,12 @@ export class ContractController {
   }
 
   @Post(':id/accept')
-  accept(@Param('id') id: string, @CurrentUser('employeeId') employeeId: string) {
-    return this.service.accept(id, employeeId);
+  accept(
+    @Param('id') id: string,
+    @Body() dto: AcceptContractDto,
+    @CurrentUser('employeeId') employeeId: string,
+  ) {
+    return this.service.accept(id, employeeId, dto);
   }
 
   @Post(':id/refuse')

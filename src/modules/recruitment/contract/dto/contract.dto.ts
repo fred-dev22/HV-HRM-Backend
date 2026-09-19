@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDateString,
   IsIn,
   IsNotEmpty,
@@ -84,6 +85,15 @@ export class NegotiateContractDto {
   @IsString()
   @IsNotEmpty()
   Comment: string;
+}
+
+// Acceptation d'une proposition. La periode d'essai n'est PAS automatique :
+// tout le monde n'en a pas une, le RH choisit a l'acceptation. Corps absent ou
+// WithTrial omis = pas de periode d'essai.
+export class AcceptContractDto {
+  @IsOptional()
+  @IsBoolean()
+  WithTrial?: boolean;
 }
 
 export class RefuseContractDto {

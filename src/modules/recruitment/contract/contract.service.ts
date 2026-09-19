@@ -7,6 +7,7 @@ import {
   GenerateContractDto,
   UpdateContractDto,
   NegotiateContractDto,
+  AcceptContractDto,
   RefuseContractDto,
   ContractTemplateDto,
   UpdateContractTemplateDto,
@@ -295,11 +296,13 @@ export class ContractService {
     return row;
   }
 
-  async accept(id: string, employeeId: string) {
+  async accept(id: string, employeeId: string, dto?: AcceptContractDto) {
     const existing = await this.findRaw(id);
     if (!['Sent', 'Negotiating'].includes(existing.Status)) {
       throw new BadRequestException('Seule une proposition envoyee ou en negociation peut etre acceptee');
     }
+    // Periode d'essai facultative : creee uniquement si le RH l'a demandee.
+    const withTrial = dto?.WithTrial === true;
     const trialEnd = new Date(existing.StartDate);
     trialEnd.setMonth(trialEnd.getMonth() + TRIAL_PERIOD_MONTHS);
 
@@ -313,26 +316,28 @@ export class ContractService {
         where: { Id: existing.ApplicationId },
         data: { Status: 'Retained', ModifiedBy: employeeId, ModifiedAt: new Date() },
       });
-      await tx.trialEmployee.create({
-        data: {
-          ReferenceCode: await nextReferenceCode(REFERENCE_PREFIXES.trial, (p) =>
-            tx.trialEmployee.count({ where: { ReferenceCode: { startsWith: p } } }),
-          ),
-          ContractId: id,
-          EmployeeName: existing.CandidateName,
-          JobTitle: existing.JobTitle,
-          EntityName: existing.EntityName,
-          StartDate: existing.StartDate,
-          TrialEndDate: trialEnd,
-          Status: 'OnTrial',
-          CreatedBy: employeeId,
-        },
-      });
+      if (withTrial) {
+        await tx.trialEmployee.create({
+          data: {
+            ReferenceCode: await nextReferenceCode(REFERENCE_PREFIXES.trial, (p) =>
+              tx.trialEmployee.count({ where: { ReferenceCode: { startsWith: p } } }),
+            ),
+            ContractId: id,
+            EmployeeName: existing.CandidateName,
+            JobTitle: existing.JobTitle,
+            EntityName: existing.EntityName,
+            StartDate: existing.StartDate,
+            TrialEndDate: trialEnd,
+            Status: 'OnTrial',
+            CreatedBy: employeeId,
+          },
+        });
+      }
       return updated;
     });
     await this.notifyRecruiters(existing.application, employeeId, {
       title: 'Proposition acceptee',
-      message: `${existing.CandidateName} a accepte la proposition ${existing.ReferenceCode}. Une periode d'essai a ete ouverte.`,
+      message: `${existing.CandidateName} a accepte la proposition ${existing.ReferenceCode}.${withTrial ? " Une periode d'essai a ete ouverte." : ''}`,
     });
     this.notify.broadcast();
     return row;
