@@ -236,6 +236,7 @@ export class EmployeeConversionService {
       Status: status,
       IsExpatriate: dto.IsExpatriate ?? false,
       EmployeeNumber: dto.EmployeeNumber,
+      DirectValidatorId: dto.DirectValidatorId,
     };
 
     // create() effectue lui-meme : assertHireDateAfterBirthDate (400),

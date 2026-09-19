@@ -107,6 +107,14 @@ export class ConvertContractToEmployeeDto {
   @IsString()
   @MaxLength(20)
   EmployeeNumber?: string;
+
+  // Validateur direct de conges, pour une entite en mode "validateur direct
+  // par employe" (le formulaire propose le responsable de l'entite par
+  // defaut). Meme controle d'eligibilite que la creation d'un employe
+  // (EmployeeService.assertValidDirectValidator : compte actif + CONGE_VALIDER).
+  @IsOptional()
+  @IsUUID()
+  DirectValidatorId?: string;
 }
 
 // Corps de POST /recruitment/trial-employees/:id/convert : tous les champs
