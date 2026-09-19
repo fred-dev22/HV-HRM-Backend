@@ -27,7 +27,9 @@ export interface RemindersScope {
 }
 
 const HREF = {
-  employee: (id: string): string => `/hr/employees/${id}/edit`,
+  // Fiche employe en popup depuis l'onglet Employes (lien direct ?open=<id>),
+  // plus de page d'edition dediee.
+  employee: (id: string): string => `/hr/employees?open=${id}`,
   trial: '/hr/recruitment/trial',
   contract: '/hr/recruitment/contracts',
 };
