@@ -232,7 +232,12 @@ if (!target) {
   process.exit(1);
 }
 mkdirSync(dirname(target), { recursive: true });
-writeFileSync(target, lines.join('\r\n'), 'utf8');
+// BOM UTF-8 en tete : sans lui, sqlcmd/SSMS lisent le fichier avec le
+// codepage ANSI par defaut de la machine (pas UTF-8), ce qui corrompt
+// silencieusement chaque caractere accentue des N'...' litteraux (verifie en
+// conditions reelles : "é" stocke comme 2 caracteres errones en base). Le BOM
+// force la detection UTF-8 quel que soit l'outil du DBA.
+writeFileSync(target, '﻿' + lines.join('\r\n'), 'utf8');
 
 const categoryPermissionCount = CATEGORIES.reduce((n, c) => n + c.Permissions.length, 0);
 console.log(`Ecrit ${target}`);

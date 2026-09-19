@@ -102,7 +102,12 @@ if (needsPatch) {
   sql = sql.replace('COMMIT TRAN;', patch);
 }
 
-writeFileSync(target, header + sql, 'utf8');
+// BOM UTF-8 en tete : sans lui, sqlcmd/SSMS lisent le fichier avec le
+// codepage ANSI par defaut de la machine (pas UTF-8) — voir le meme
+// correctif, verifie en conditions reelles, dans export-seed-sql.ts. Le DDL
+// n'a pas de litteral accentue aujourd'hui, mais un futur DEFAULT/CHECK en
+// texte FR y serait expose au meme risque sans ce BOM.
+writeFileSync(target, '﻿' + header + sql, 'utf8');
 
 console.log(`Ecrit ${target}`);
 console.log(`  source : ${fromSchema ?? 'base vide'} -> prisma/schema.prisma`);
