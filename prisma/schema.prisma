@@ -143,7 +143,8 @@ model Position {
   createdByEmployee  Employee  @relation("PositionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   modifiedByEmployee Employee? @relation("PositionModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
-  employees Employee[]
+  employees      Employee[]
+  hiringRequests HiringRequest[]
 
   @@index([JobId])
   @@index([OrganizationUnitId])
@@ -1247,6 +1248,10 @@ model HiringRequest {
   EntityName    String @db.NVarChar(150)
   Headcount     Int    @default(1)
   Profile       String @db.NVarChar(Max)
+  // Poste existant choisi dans le referentiel (optionnel) : sert a signaler,
+  // sans jamais bloquer, un effectif superieur aux places restantes du poste
+  // (voir HiringRequestService.shape). NULL = poste en texte libre.
+  PositionId    String? @db.UniqueIdentifier
   // Status: Draft | Open | Closed | Cancelled
   Status        String @default("Draft") @db.NVarChar(20)
 
@@ -1260,11 +1265,13 @@ model HiringRequest {
 
   createdByEmployee  Employee  @relation("HiringRequestCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   modifiedByEmployee Employee? @relation("HiringRequestModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  position           Position? @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   jobOffers JobOffer[]
 
   @@index([Status])
   @@index([CreatedBy])
+  @@index([PositionId])
 }
 
 /// Offre d'emploi. Un stage est une offre comme une autre (ContractType =

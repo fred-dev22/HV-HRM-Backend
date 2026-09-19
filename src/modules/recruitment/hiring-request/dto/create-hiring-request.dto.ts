@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsString, MaxLength, Min } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export class CreateHiringRequestDto {
   @IsString()
@@ -18,4 +18,10 @@ export class CreateHiringRequestDto {
   @IsString()
   @IsNotEmpty()
   Profile: string;
+
+  // Poste existant du referentiel (optionnel). null (en modification) le
+  // detache : la demande repasse en poste libre.
+  @IsOptional()
+  @IsUUID()
+  PositionId?: string | null;
 }

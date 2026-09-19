@@ -14,6 +14,9 @@ import { UpdateHiringRequestDto } from './dto/update-hiring-request.dto';
 const INCLUDE = {
   createdByEmployee: { select: { Id: true, FullName: true } },
   jobOffers: { where: { IsDeleted: false }, select: { Id: true, ReferenceCode: true, Title: true, Status: true } },
+  // Sieges du poste choisi (occupes = employes titulaires non supprimes,
+  // jamais stocke, meme regle que PositionService.occupiedCount) — voir shape().
+  position: { select: { Code: true, Capacity: true, _count: { select: { employees: { where: { IsDeleted: false } } } } } },
 } as const;
 
 // Expression de besoin — exposee cote espace Administration (permissions
@@ -25,6 +28,38 @@ export class HiringRequestService {
     private readonly prisma: PrismaService,
     private readonly notify: RecruitmentNotifyService,
   ) {}
+
+  // Signal (jamais un blocage) : effectif demande superieur aux places restantes
+  // du poste choisi. Recalcule a chaque lecture depuis l'occupation reelle du
+  // poste, donc il disparait tout seul quand une place se libere ; limite aux
+  // demandes encore actives (brouillon / exprimee), sans objet une fois
+  // cloturee ou annulee.
+  private shape<
+    T extends {
+      Status: string;
+      Headcount: number;
+      position: { Code: string; Capacity: number; _count: { employees: number } } | null;
+    },
+  >(row: T) {
+    const { position, ...rest } = row;
+    const capacity = position ? position.Capacity : null;
+    const occupied = position ? position._count.employees : null;
+    const available = capacity !== null && occupied !== null ? Math.max(0, capacity - occupied) : null;
+    const active = row.Status === 'Draft' || row.Status === 'Open';
+    return {
+      ...rest,
+      PositionCode: position?.Code ?? null,
+      PositionCapacity: capacity,
+      PositionOccupiedCount: occupied,
+      PositionAvailable: available,
+      CapacityWarning: active && available !== null && row.Headcount > available,
+    };
+  }
+
+  private async assertPositionExists(positionId: string) {
+    const position = await this.prisma.position.findUnique({ where: { Id: positionId }, select: { Id: true } });
+    if (!position) throw new BadRequestException(`Poste ${positionId} introuvable`);
+  }
 
   private async findRaw(id: string) {
     const row = await this.prisma.hiringRequest.findUnique({ where: { Id: id } });
@@ -41,6 +76,7 @@ export class HiringRequestService {
 
   async create(dto: CreateHiringRequestDto, employeeId: string, permissions: Set<string>) {
     assertBesoinCanExpress(permissions);
+    if (dto.PositionId) await this.assertPositionExists(dto.PositionId);
     const ReferenceCode = await nextReferenceCode(REFERENCE_PREFIXES.hiringRequest, (p) =>
       this.prisma.hiringRequest.count({ where: { ReferenceCode: { startsWith: p } } }),
     );
@@ -51,22 +87,24 @@ export class HiringRequestService {
         EntityName: dto.EntityName,
         Headcount: dto.Headcount,
         Profile: dto.Profile,
+        PositionId: dto.PositionId ?? null,
         Status: 'Draft',
         CreatedBy: employeeId,
       },
       include: INCLUDE,
     });
     this.notify.broadcast();
-    return row;
+    return this.shape(row);
   }
 
   async findAll(permissions: Set<string>) {
     assertBesoinCanView(permissions);
-    return this.prisma.hiringRequest.findMany({
+    const rows = await this.prisma.hiringRequest.findMany({
       where: { IsDeleted: false },
       include: INCLUDE,
       orderBy: { CreatedAt: 'desc' },
     });
+    return rows.map((r) => this.shape(r));
   }
 
   async findOne(id: string, permissions: Set<string>) {
@@ -75,7 +113,7 @@ export class HiringRequestService {
     if (!row || row.IsDeleted) {
       throw new NotFoundException(`Expression de besoin ${id} introuvable`);
     }
-    return row;
+    return this.shape(row);
   }
 
   async update(id: string, dto: UpdateHiringRequestDto, employeeId: string, permissions: Set<string>) {
@@ -85,6 +123,7 @@ export class HiringRequestService {
     if (existing.Status !== 'Draft') {
       throw new BadRequestException('Seule une expression de besoin en brouillon peut etre modifiee');
     }
+    if (dto.PositionId) await this.assertPositionExists(dto.PositionId);
     const row = await this.prisma.hiringRequest.update({
       where: { Id: id },
       data: {
@@ -92,13 +131,14 @@ export class HiringRequestService {
         EntityName: dto.EntityName ?? existing.EntityName,
         Headcount: dto.Headcount ?? existing.Headcount,
         Profile: dto.Profile ?? existing.Profile,
+        PositionId: dto.PositionId === undefined ? existing.PositionId : dto.PositionId,
         ModifiedBy: employeeId,
         ModifiedAt: new Date(),
       },
       include: INCLUDE,
     });
     this.notify.broadcast();
-    return row;
+    return this.shape(row);
   }
 
   // "Exprimer" le besoin : Draft -> Open (visible du RH pour traitement).
@@ -115,7 +155,7 @@ export class HiringRequestService {
       include: INCLUDE,
     });
     this.notify.broadcast();
-    return row;
+    return this.shape(row);
   }
 
   async close(id: string, employeeId: string, permissions: Set<string>) {
@@ -130,7 +170,7 @@ export class HiringRequestService {
       include: INCLUDE,
     });
     this.notify.broadcast();
-    return row;
+    return this.shape(row);
   }
 
   async cancel(id: string, employeeId: string, permissions: Set<string>) {
@@ -146,7 +186,7 @@ export class HiringRequestService {
       include: INCLUDE,
     });
     this.notify.broadcast();
-    return row;
+    return this.shape(row);
   }
 
   async remove(id: string, employeeId: string, permissions: Set<string>) {

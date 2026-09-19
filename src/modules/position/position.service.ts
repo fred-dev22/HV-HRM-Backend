@@ -11,7 +11,9 @@ export class PositionService {
   // occupiedCount jamais stocke — toujours recompte depuis Employee.PositionId
   // (voir schema.prisma) pour eviter tout desync avec les affectations reelles.
   private withOccupiedCount() {
-    return { include: { _count: { select: { employees: true } } } } as const;
+    // Titulaires reels seulement : un employe supprime definitivement
+    // (softDelete) garde son PositionId en base mais n'occupe plus de siege.
+    return { include: { _count: { select: { employees: { where: { IsDeleted: false } } } } } } as const;
   }
 
   private mapCount<T extends { _count: { employees: number } }>(position: T) {

@@ -60,7 +60,9 @@ export class EmployeeService {
   private async assertPositionHasCapacity(tx: TxClient, positionId: string) {
     const position = await tx.position.findUnique({
       where: { Id: positionId },
-      include: { _count: { select: { employees: true } } },
+      // Titulaires reels seulement : un employe supprime definitivement
+      // (softDelete) garde son PositionId en base mais n'occupe plus de siege.
+      include: { _count: { select: { employees: { where: { IsDeleted: false } } } } },
     });
     if (!position) {
       throw new NotFoundException(`Poste ${positionId} introuvable`);
