@@ -222,16 +222,6 @@ model Employee {
   // au-dessus) : traite comme auto-approbation, meme regle que pour le pool.
   DirectValidatorId String? @db.UniqueIdentifier
 
-  // Validateur direct (demande client, retour du 08/09) : bascule le
-  // workflow de validation de conge de cet employe sur UN validateur unique
-  // et fixe, au lieu du pool par entite (ApprovalPool/ApprovalPoolMember) —
-  // pense pour les organisations sans hierarchie a plusieurs niveaux. null
-  // (par defaut) = comportement inchange, pool par entite. Voir
-  // LeaveRequestService.routeToApproval/routeToDirectValidator. Un employe
-  // peut etre son propre validateur direct (rare, ex: aucun niveau
-  // au-dessus) : traite comme auto-approbation, meme regle que pour le pool.
-  DirectValidatorId String? @db.UniqueIdentifier
-
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier
@@ -593,7 +583,6 @@ model ApprovalDecision {
   @@index([DirectValidatorEmployeeId])
   @@index([ValidatedByEmployeeId])
   @@index([Token])
-  @@index([DirectValidatorEmployeeId])
 }
 
 // =========================================================================
@@ -751,16 +740,6 @@ model LeaveType {
   // computeWorkingDays (backend, source de verite) et utils/calendar.ts
   // chargedWorkingDays (frontend, apercu) qui doivent rester en miroir.
   CountCalendarDays Boolean @default(false)
-
-  // Decompte calendaire (retour client, 08/09) : false (par defaut) = jours
-  // ouvres, le comportement actuel (weekends/feries exclus, regle du
-  // week-end avale pour un local, voir computeWorkingDays). true = TOUS les
-  // jours du calendrier comptent (weekends et feries inclus), utile pour un
-  // type comme Convalescence Maladie ou l'arret couvre des jours calendaires
-  // et non des jours travailles. Voir leave-request.service.ts
-  // computeWorkingDays (backend, source de verite) et utils/calendar.ts
-  // chargedWorkingDays (frontend, apercu) qui doivent rester en miroir.
-  CountCalendarDays    Boolean  @default(false)
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
@@ -1262,18 +1241,18 @@ model Notification {
 /// Administration. Pas de validation : Draft -> Open (exprime, visible du RH)
 /// -> Closed | Cancelled.
 model HiringRequest {
-  Id            String @id @default(uuid()) @db.UniqueIdentifier
-  ReferenceCode String @unique @db.NVarChar(20)
-  PositionTitle String @db.NVarChar(150)
-  EntityName    String @db.NVarChar(150)
-  Headcount     Int    @default(1)
-  Profile       String @db.NVarChar(Max)
+  Id                     String  @id @default(uuid()) @db.UniqueIdentifier
+  ReferenceCode          String  @unique @db.NVarChar(20)
+  PositionTitle          String  @db.NVarChar(150)
+  EntityName             String  @db.NVarChar(150)
+  Headcount              Int     @default(1)
+  Profile                String  @db.NVarChar(Max)
   // Poste existant choisi dans le referentiel (optionnel) : sert a signaler,
   // sans jamais bloquer, un effectif superieur aux places restantes du poste
   // (voir HiringRequestService.shape). NULL = poste en texte libre.
-  PositionId    String? @db.UniqueIdentifier
+  PositionId             String? @db.UniqueIdentifier
   // Status: Draft | Open | Closed | Cancelled
-  Status        String @default("Draft") @db.NVarChar(20)
+  Status                 String  @default("Draft") @db.NVarChar(20)
   // Beneficiaire reel de la demande, distinct du createur (retour client du
   // 19/09 : un assistant doit pouvoir exprimer un besoin pour son directeur,
   // meme principe que LeaveRequest.EmployeeId vs CreatedBy). NULL = la
@@ -1288,10 +1267,10 @@ model HiringRequest {
   DeletedBy  String?   @db.UniqueIdentifier
   DeletedAt  DateTime? @db.DateTime2
 
-  createdByEmployee     Employee  @relation("HiringRequestCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  modifiedByEmployee    Employee? @relation("HiringRequestModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  requestedForEmployee  Employee? @relation("HiringRequestRequestedFor", fields: [RequestedForEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  position              Position? @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  createdByEmployee    Employee  @relation("HiringRequestCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee   Employee? @relation("HiringRequestModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  requestedForEmployee Employee? @relation("HiringRequestRequestedFor", fields: [RequestedForEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  position             Position? @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   jobOffers JobOffer[]
 
@@ -1528,17 +1507,17 @@ model InterviewParticipant {
 /// toutes ces lignes, calculee a la lecture (voir InterviewService.shape),
 /// jamais stockee.
 model InterviewEvaluation {
-  Id                  String   @id @default(uuid()) @db.UniqueIdentifier
-  InterviewId         String   @db.UniqueIdentifier
-  EvaluatorEmployeeId String   @db.UniqueIdentifier
-  Score               Decimal  @db.Decimal(4, 2)
-  Comment             String   @db.NVarChar(Max)
+  Id                  String    @id @default(uuid()) @db.UniqueIdentifier
+  InterviewId         String    @db.UniqueIdentifier
+  EvaluatorEmployeeId String    @db.UniqueIdentifier
+  Score               Decimal   @db.Decimal(4, 2)
+  Comment             String    @db.NVarChar(Max)
   // Snapshot du nom au moment de l'evaluation (meme convention que
   // InterviewParticipant.Name) : reste lisible meme si le compte employe
   // est desactive/supprime par la suite.
-  InterviewerName     String   @db.NVarChar(150)
-  TemplateName        String?  @db.NVarChar(150)
-  CreatedAt           DateTime @default(now()) @db.DateTime2
+  InterviewerName     String    @db.NVarChar(150)
+  TemplateName        String?   @db.NVarChar(150)
+  CreatedAt           DateTime  @default(now()) @db.DateTime2
   ModifiedAt          DateTime? @db.DateTime2
 
   interview Interview @relation(fields: [InterviewId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
