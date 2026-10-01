@@ -15,6 +15,20 @@ import { bulkImport } from '../../common/utils/bulk-import.util';
 
 type TxClient = Prisma.TransactionClient | PrismaService;
 
+// Permissions qui rendent un employe reellement eligible comme validateur
+// (pool par entite OU validateur direct par employe). Renvoyees par findAll()
+// a partir des DROITS EFFECTIFS du compte (UserPermission), pas du gabarit de
+// sa categorie qui peut avoir diverge depuis la creation du compte (voir
+// decision du 29/07 et assertValidDirectValidator ci-dessous) — sans ca, un
+// droit accorde individuellement (ex: CONGE_VALIDER sur un compte dont la
+// categorie ne l'a pas) n'apparaissait jamais dans les selecteurs de
+// validateur cote frontend, alors que le backend l'aurait accepte.
+const VALIDATOR_PERMISSION_CODES = [
+  'CONGE_VALIDER',
+  'MISSION_VALIDER',
+  'FRAIS_VALIDER',
+] as const;
+
 @Injectable()
 export class EmployeeService {
   private readonly logger = new Logger(EmployeeService.name);
@@ -68,8 +82,55 @@ export class EmployeeService {
     }
   }
 
+  // Un validateur direct (Employee.DirectValidatorId) doit reellement
+  // pouvoir traiter la file "à valider" une fois une demande routée vers lui
+  // (voir LeaveRequestService.routeToApproval) — sinon elle reste bloquée
+  // indéfiniment, personne ne peut jamais l'approuver (permission requise
+  // sur les endpoints approve/reject/return, voir leave-request.controller.ts).
+  // Même règle déjà appliquée en amont côté sélecteur du pool par entité
+  // (ApprovalPoolConfig.vue, canValidate) ; ici c'est l'enforcement serveur,
+  // contre une valeur posée directement via l'API ou un import CSV erroné —
+  // vérifie la permission RÉELLEMENT accordée au compte (UserPermission),
+  // pas seulement le gabarit de sa catégorie (qui peut avoir divergé depuis,
+  // voir decision du 29/07).
+  private async assertValidDirectValidator(directValidatorId: string) {
+    const validator = await this.prisma.employee.findUnique({
+      where: { Id: directValidatorId },
+      select: {
+        IsDeleted: true,
+        user: {
+          select: {
+            IsActive: true,
+            userPermissions: {
+              select: { permission: { select: { Code: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!validator || validator.IsDeleted) {
+      throw new NotFoundException(`Employé ${directValidatorId} introuvable`);
+    }
+    if (!validator.user || !validator.user.IsActive) {
+      throw new BadRequestException(
+        "Ce validateur n'a pas de compte utilisateur actif : il ne pourrait jamais accéder à la file « À valider »",
+      );
+    }
+    const hasPermission = validator.user.userPermissions.some(
+      (up) => up.permission.Code === 'CONGE_VALIDER',
+    );
+    if (!hasPermission) {
+      throw new BadRequestException(
+        "Ce validateur n'a pas la permission de validation des congés (CONGE_VALIDER) : il ne pourrait jamais traiter la demande",
+      );
+    }
+  }
+
   async create(dto: CreateEmployeeDto, createdBy: string) {
     this.assertHireDateAfterBirthDate(dto.BirthDate, dto.HireDate);
+    if (dto.DirectValidatorId) {
+      await this.assertValidDirectValidator(dto.DirectValidatorId);
+    }
     const employeeNumber =
       dto.EmployeeNumber?.trim() || (await this.generateEmployeeNumber());
     const employee = await this.prisma.$transaction(async (tx) => {
@@ -115,10 +176,32 @@ export class EmployeeService {
   // IsSystem exclut le compte d'amorcage seede ("Admin HV") — pas un
   // vrai membre du personnel, ne doit jamais apparaitre dans une liste ou
   // un selecteur (voir migration IsSystem + prisma/backfill-employee-is-system.ts).
-  findAll() {
-    return this.prisma.employee.findMany({
+  async findAll() {
+    const employees = await this.prisma.employee.findMany({
       where: { IsSystem: false, IsDeleted: false },
+      include: {
+        user: {
+          select: {
+            IsActive: true,
+            userPermissions: {
+              select: { permission: { select: { Code: true } } },
+            },
+          },
+        },
+      },
     });
+    // ValidatorPermissions : droits de validation REELLEMENT accordes au
+    // compte (voir VALIDATOR_PERMISSION_CODES en tete de fichier). Compte
+    // inactif ou absent => liste vide. Le champ `user` brut est retire de la
+    // reponse, seul le tableau derive est expose.
+    return employees.map(({ user, ...employee }) => ({
+      ...employee,
+      ValidatorPermissions: user?.IsActive
+        ? VALIDATOR_PERMISSION_CODES.filter((code) =>
+            user.userPermissions.some((up) => up.permission.Code === code),
+          )
+        : [],
+    }));
   }
 
   // Annuaire minimal, ouvert a tout employe authentifie (pas de permission
@@ -252,6 +335,12 @@ export class EmployeeService {
       dto.BirthDate ?? existing.BirthDate,
       dto.HireDate ?? existing.HireDate,
     );
+    // Uniquement si le champ est explicitement envoyé et non-vide — l'omettre
+    // (pas de changement) ou l'envoyer null (retrait du validateur direct,
+    // retour au pool par entité) ne déclenchent jamais cette vérification.
+    if (dto.DirectValidatorId) {
+      await this.assertValidDirectValidator(dto.DirectValidatorId);
+    }
 
     // 'PositionId' in dto distinguishes "field omitted from the PATCH body"
     // (no change intended) from "field explicitly sent" (including null,

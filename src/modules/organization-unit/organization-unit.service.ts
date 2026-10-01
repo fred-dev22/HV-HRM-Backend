@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateOrganizationUnitDto } from './dto/create-organization-unit.dto';
 import { UpdateOrganizationUnitDto } from './dto/update-organization-unit.dto';
+import { SetLeaveApprovalModeDto } from './dto/set-leave-approval-mode.dto';
 import { bulkImport } from '../../common/utils/bulk-import.util';
 
 @Injectable()
@@ -113,6 +114,27 @@ export class OrganizationUnitService {
     return this.prisma.organizationUnit.update({
       where: { Id: id },
       data: { IsDeleted: true, DeletedBy: deletedBy, DeletedAt: new Date() },
+    });
+  }
+
+  // Voir SetLeaveApprovalModeDto — endpoint dedie, ne touche jamais Status
+  // (contrairement au PATCH generique ci-dessus). Pool par defaut ; passer en
+  // DirectValidator n'assigne aucun validateur automatiquement, une demande
+  // de conge pour un employe sans Employee.DirectValidatorId encore renseigne
+  // sera bloquee a la soumission (voir LeaveRequestService.routeToApproval).
+  async setLeaveApprovalMode(
+    id: string,
+    dto: SetLeaveApprovalModeDto,
+    modifiedBy: string,
+  ) {
+    await this.findOne(id);
+    return this.prisma.organizationUnit.update({
+      where: { Id: id },
+      data: {
+        LeaveApprovalMode: dto.LeaveApprovalMode,
+        ModifiedBy: modifiedBy,
+        ModifiedAt: new Date(),
+      },
     });
   }
 

@@ -60,7 +60,7 @@ export class EmployeeCategoryService {
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
         throw new ConflictException(
-          'Cette catégorie est encore utilisée par au moins un employé ou un compte utilisateur et ne peut pas être supprimée — réaffectez-les à une autre catégorie avant de la supprimer.',
+          'Cette catégorie est encore utilisée par au moins un employé ou un compte utilisateur et ne peut pas être supprimée : réaffectez-les à une autre catégorie avant de la supprimer.',
         );
       }
       throw err;

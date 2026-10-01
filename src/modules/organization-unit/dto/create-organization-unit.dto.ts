@@ -51,4 +51,15 @@ export class CreateOrganizationUnitDto {
 
   @IsIn(['Draft', 'PendingApproval', 'Active', 'Inactive'])
   Status: string;
+
+  // Optionnel : par defaut la colonne Prisma vaut 'Pool' si omis (voir
+  // schema.prisma). Accepte ici (creation/import CSV, retour client du
+  // 09/09) pour permettre de choisir le mode des la creation d'une entite,
+  // sans devoir repasser par PATCH :id/leave-approval-mode juste apres.
+  // Volontairement absent de UpdateOrganizationUnitDto (voir ce fichier) :
+  // une fois l'entite creee, seul cet endpoint dedie doit pouvoir changer ce
+  // choix, jamais le PATCH generique.
+  @IsOptional()
+  @IsIn(['Pool', 'DirectValidator'])
+  LeaveApprovalMode?: string;
 }

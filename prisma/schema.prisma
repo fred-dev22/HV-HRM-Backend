@@ -31,23 +31,33 @@ datasource db {
 /// Unite organisationnelle de l'entreprise : Direction, Departement ou Service.
 /// Auto-referencee via ParentId pour modeliser la hierarchie.
 model OrganizationUnit {
-  Id              String  @id @default(uuid()) @db.UniqueIdentifier
-  Code            String  @unique @db.NVarChar(20)
-  Name            String  @db.NVarChar(150)
+  Id                String  @id @default(uuid()) @db.UniqueIdentifier
+  Code              String  @unique @db.NVarChar(20)
+  Name              String  @db.NVarChar(150)
   // Type: Direction | Department | Service
-  Type            String  @db.NVarChar(20)
+  Type              String  @db.NVarChar(20)
   // Absent du modele PDF — identifiant legal/fiscal local (RCS, NIF...),
   // ajoute a la demande cote UI (ecrans de creation/edition d'entite).
-  LegalIdentifier String? @db.NVarChar(50)
-  ParentId        String? @db.UniqueIdentifier
+  LegalIdentifier   String? @db.NVarChar(50)
+  ParentId          String? @db.UniqueIdentifier
   // Responsable designe de cette unite. Nullable en pratique : une unite peut
   // exister avant qu'un employe lui soit rattache (bootstrap / transition).
-  ManagerId       String? @db.UniqueIdentifier
-  Address         String? @db.NVarChar(255)
-  Phone           String? @db.NVarChar(30)
-  Email           String? @db.NVarChar(150)
+  ManagerId         String? @db.UniqueIdentifier
+  Address           String? @db.NVarChar(255)
+  Phone             String? @db.NVarChar(30)
+  Email             String? @db.NVarChar(150)
   // Status: Draft | PendingApproval | Active | Inactive
-  Status          String  @db.NVarChar(20)
+  Status            String  @db.NVarChar(20)
+  // LeaveApprovalMode: Pool | DirectValidator (retour client du 09/09) — les
+  // deux mecanismes de validation des conges de cette entite (pool par
+  // entite vs validateur direct par employe, voir Employee.DirectValidatorId)
+  // sont mutuellement exclusifs, jamais actifs en meme temps pour les memes
+  // employes. 'Pool' par defaut = comportement historique inchange pour
+  // toute entite existante. Change via un endpoint dedie
+  // (PATCH /organization-units/:id/leave-approval-mode), pas le PATCH
+  // generique — evite de repasser l'entite en PendingApproval pour un simple
+  // changement de regle de validation (voir update() dans le service).
+  LeaveApprovalMode String  @default("Pool") @db.NVarChar(20)
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
@@ -186,21 +196,30 @@ model Employee {
   // MySQL) — cassant des le 2e employe sans compte. seed.ts la remplace par
   // un index unique FILTRE (WHERE UserId IS NOT NULL) a chaque demarrage —
   // voir fixEmployeeUserIdUniqueIndex(), a rejouer apres tout `db push`.
-  UserId       String? @unique @db.UniqueIdentifier
+  UserId            String? @unique @db.UniqueIdentifier
   // Status: Active | OnTrial | OnLeave | Inactive
-  Status       String  @db.NVarChar(10)
+  Status            String  @db.NVarChar(10)
   // Regime de conges (reunion Dominique du 12/06) : un employe "local" qui
   // est absent tout le vendredi precedant un week-end voit ce week-end aussi
   // decompte de son solde (ex: conge pris vendredi->lundi = 3 jours), pas un
   // "expatrie" (voir leave-request.service.ts computeWorkingDays). false par
   // defaut = regime local, le plus repandu chez HV.
-  IsExpatriate Boolean @default(false)
+  IsExpatriate      Boolean @default(false)
   // Compte d'amorçage cree par le seed (ex : "Admin HV"), pas un vrai
   // membre du personnel — ne doit jamais apparaitre comme option dans un
   // selecteur (beneficiaire, interimaire, validateur, responsable...), voir
   // employee.service.ts findAll/findTeam/findDirectory. Reste visible et
   // gerable normalement partout ou l'admin le cherche explicitement par nom.
-  IsSystem     Boolean @default(false)
+  IsSystem          Boolean @default(false)
+  // Validateur direct (demande client, retour du 08/09) : bascule le
+  // workflow de validation de conge de cet employe sur UN validateur unique
+  // et fixe, au lieu du pool par entite (ApprovalPool/ApprovalPoolMember) —
+  // pense pour les organisations sans hierarchie a plusieurs niveaux. null
+  // (par defaut) = comportement inchange, pool par entite. Voir
+  // LeaveRequestService.routeToApproval/routeToDirectValidator. Un employe
+  // peut etre son propre validateur direct (rare, ex: aucun niveau
+  // au-dessus) : traite comme auto-approbation, meme regle que pour le pool.
+  DirectValidatorId String? @db.UniqueIdentifier
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
@@ -211,10 +230,12 @@ model Employee {
   DeletedBy  String?   @db.UniqueIdentifier
   DeletedAt  DateTime? @db.DateTime2
 
-  position         Position?         @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  organizationUnit OrganizationUnit  @relation("EmployeeOrganizationUnit", fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  user             User?             @relation(fields: [UserId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  employeeCategory EmployeeCategory? @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  position           Position?         @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  directValidator    Employee?         @relation("EmployeeDirectValidator", fields: [DirectValidatorId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  directValidatorFor Employee[]        @relation("EmployeeDirectValidator")
+  organizationUnit   OrganizationUnit  @relation("EmployeeOrganizationUnit", fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  user               User?             @relation(fields: [UserId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employeeCategory   EmployeeCategory? @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   createdByEmployee  Employee?  @relation("EmployeeCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   employeesCreated   Employee[] @relation("EmployeeCreatedBy")
@@ -239,8 +260,9 @@ model Employee {
   approvalPoolInterimMemberships ApprovalPoolMember[] @relation("ApprovalPoolMemberInterim")
   approvalPoolMembersCreated     ApprovalPoolMember[] @relation("ApprovalPoolMemberCreatedBy")
 
-  approvalDecisionsValidated ApprovalDecision[] @relation("ApprovalDecisionValidatedBy")
-  approvalDecisionsCreated   ApprovalDecision[] @relation("ApprovalDecisionCreatedBy")
+  approvalDecisionsValidated         ApprovalDecision[] @relation("ApprovalDecisionValidatedBy")
+  approvalDecisionsCreated           ApprovalDecision[] @relation("ApprovalDecisionCreatedBy")
+  approvalDecisionsAsDirectValidator ApprovalDecision[] @relation("ApprovalDecisionDirectValidator")
 
   companySettingsModified CompanySettings[] @relation("CompanySettingsModifiedBy")
 
@@ -301,6 +323,7 @@ model Employee {
   @@index([PositionId])
   @@index([OrganizationUnitId])
   @@index([EmployeeCategoryId])
+  @@index([DirectValidatorId])
 }
 
 /// Compte utilisateur donnant acces a la plateforme AfrikEdge / Productive
@@ -482,17 +505,24 @@ model ApprovalDecision {
   Id String @id @default(uuid()) @db.UniqueIdentifier
 
   // EntityType: LeaveRequest | MissionOrder | ExpenseReport
-  EntityType            String    @db.NVarChar(30)
+  EntityType                String    @db.NVarChar(30)
   // ID de la demande concernee (LeaveRequest, MissionOrder ou ExpenseReport
   // selon EntityType) — reference polymorphique, pas de FK Prisma.
-  EntityId              String    @db.UniqueIdentifier
-  ApprovalPoolMemberId  String    @db.UniqueIdentifier
-  ValidatedByEmployeeId String    @db.UniqueIdentifier
-  StepOrder             Int
-  // Decision: Pending | Approved | Rejected | Returned
-  Decision              String    @db.NVarChar(20)
-  Comment               String?   @db.NVarChar(500)
-  DecidedAt             DateTime? @db.DateTime2
+  EntityId                  String    @db.UniqueIdentifier
+  // Nullable depuis l'ajout du validateur direct (Employee.DirectValidatorId,
+  // retour client du 08/09) : une decision vient SOIT d'un niveau de pool
+  // (ApprovalPoolMemberId rempli), SOIT d'un validateur direct
+  // (DirectValidatorEmployeeId rempli ci-dessous) — jamais les deux, jamais
+  // aucun des deux. Voir LeaveRequestService.routeToApproval/
+  // routeToDirectValidator/approve/assertIsCurrentApprover.
+  ApprovalPoolMemberId      String?   @db.UniqueIdentifier
+  DirectValidatorEmployeeId String?   @db.UniqueIdentifier
+  ValidatedByEmployeeId     String    @db.UniqueIdentifier
+  StepOrder                 Int
+  // Decision: Pending | Approved | Rejected | Returned | Cancelled
+  Decision                  String    @db.NVarChar(20)
+  Comment                   String?   @db.NVarChar(500)
+  DecidedAt                 DateTime? @db.DateTime2
   // Jeton public pour la validation par email (clique-pour-approuver sans
   // connexion) — genere a la creation de la decision, verifie cote
   // PublicApprovalService (findFirst, pas findUnique : pas de contrainte
@@ -502,12 +532,13 @@ model ApprovalDecision {
   // collision reelle negligeable, l'index suffit pour la performance du
   // lookup). Invalide de facto des que Decision != Pending (voir la
   // verification "Decision: Pending" dans le lookup par token).
-  Token                 String?   @db.NVarChar(64)
+  Token                     String?   @db.NVarChar(64)
 
   CreatedBy String   @db.UniqueIdentifier
   CreatedAt DateTime @default(now()) @db.DateTime2
 
-  approvalPoolMember ApprovalPoolMember @relation(fields: [ApprovalPoolMemberId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  approvalPoolMember      ApprovalPoolMember? @relation(fields: [ApprovalPoolMemberId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  directValidatorEmployee Employee?           @relation("ApprovalDecisionDirectValidator", fields: [DirectValidatorEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   validatedByEmployee Employee @relation("ApprovalDecisionValidatedBy", fields: [ValidatedByEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   createdByEmployee   Employee @relation("ApprovalDecisionCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
@@ -516,6 +547,7 @@ model ApprovalDecision {
   @@index([ApprovalPoolMemberId])
   @@index([ValidatedByEmployeeId])
   @@index([Token])
+  @@index([DirectValidatorEmployeeId])
 }
 
 // =========================================================================
@@ -608,13 +640,13 @@ model CalendarWorkDay {
 /// Calendrier des jours feries utilise par le backend pour exclure ces jours
 /// du calcul de duree des absences.
 model Holiday {
-  Id                 String   @id @default(uuid()) @db.UniqueIdentifier
-  Name               String   @db.NVarChar(150)
-  Date               DateTime @db.Date
-  IsRecurring        Boolean  @default(false)
+  Id                  String   @id @default(uuid()) @db.UniqueIdentifier
+  Name                String   @db.NVarChar(150)
+  Date                DateTime @db.Date
+  IsRecurring         Boolean  @default(false)
   // HolidayType: National | Local
-  HolidayType        String   @db.NVarChar(10)
-  OrganizationUnitId String?  @db.UniqueIdentifier
+  HolidayType         String   @db.NVarChar(10)
+  OrganizationUnitId  String?  @db.UniqueIdentifier
   // Ciblage d'eligibilite (demande client, 01/09), meme mecanisme que
   // sur LeaveType ci-dessus — nul/absent = s'applique a tout le monde.
   AppliesToGender     String?  @db.NVarChar(5)
@@ -660,17 +692,27 @@ model LeaveType {
   // s'applique a tout le monde sur ce critere. Meme mecanisme et memes
   // colonnes que sur Holiday ci-dessous, voir common/utils/eligibility.util.ts
   // pour la logique de filtrage partagee entre les deux.
-  AppliesToGender      String?  @db.NVarChar(5)
-  AppliesToExpatriate  Boolean?
-  OrganizationUnitId   String?  @db.UniqueIdentifier
+  AppliesToGender     String?  @db.NVarChar(5)
+  AppliesToExpatriate Boolean?
+  OrganizationUnitId  String?  @db.UniqueIdentifier
+
+  // Decompte calendaire (retour client, 08/09) : false (par defaut) = jours
+  // ouvres, le comportement actuel (weekends/feries exclus, regle du
+  // week-end avale pour un local, voir computeWorkingDays). true = TOUS les
+  // jours du calendrier comptent (weekends et feries inclus), utile pour un
+  // type comme Convalescence Maladie ou l'arret couvre des jours calendaires
+  // et non des jours travailles. Voir leave-request.service.ts
+  // computeWorkingDays (backend, source de verite) et utils/calendar.ts
+  // chargedWorkingDays (frontend, apercu) qui doivent rester en miroir.
+  CountCalendarDays Boolean @default(false)
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier
   ModifiedAt DateTime? @db.DateTime2
 
-  createdByEmployee  Employee  @relation("LeaveTypeCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  modifiedByEmployee Employee? @relation("LeaveTypeModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  createdByEmployee  Employee          @relation("LeaveTypeCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee Employee?         @relation("LeaveTypeModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   organizationUnit   OrganizationUnit? @relation(fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   leaveTransactions  LeaveTransaction[]

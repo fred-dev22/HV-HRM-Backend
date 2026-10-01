@@ -15,7 +15,7 @@ export class CompanySettingsService {
     const existing = await this.prisma.companySettings.findFirst();
     if (existing) {
       throw new ConflictException(
-        "Les paramètres de l'entreprise existent déjà — utilisez PATCH pour les modifier",
+        "Les paramètres de l'entreprise existent déjà : utilisez PATCH pour les modifier",
       );
     }
     return this.prisma.companySettings.create({ data: dto });
@@ -33,7 +33,7 @@ export class CompanySettingsService {
     const existing = await this.prisma.companySettings.findFirst();
     if (!existing) {
       throw new NotFoundException(
-        "Les paramètres de l'entreprise n'ont pas encore été initialisés — créez-les d'abord",
+        "Les paramètres de l'entreprise n'ont pas encore été initialisés : créez-les d'abord",
       );
     }
     return this.prisma.companySettings.update({

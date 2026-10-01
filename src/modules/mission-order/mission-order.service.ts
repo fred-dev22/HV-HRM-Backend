@@ -16,6 +16,7 @@ import { DecideMissionOrderDto } from './dto/decide-mission-order.dto';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 const EDITABLE_STATUSES = ['Draft', 'Returned'];
+const IN_APPROVAL_STATUSES = ['InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4'];
 const CANCELLABLE_STATUSES = ['Draft', 'InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4', 'Approved'];
 const DEFAULT_CURRENCY = 'MGA';
 
@@ -231,7 +232,7 @@ export class MissionOrderService {
     }
     if (!employee.EmployeeCategoryId) {
       throw new BadRequestException(
-        "Cet employé n'a pas de catégorie de frais assignée — contactez le RH avant de créer un ordre de mission",
+        "Cet employé n'a pas de catégorie de frais assignée : contactez le RH avant de créer un ordre de mission",
       );
     }
 
@@ -584,7 +585,7 @@ export class MissionOrderService {
     const pool = await this.approvalPoolService.findApplicablePool(employee.OrganizationUnitId, 'Mission');
     if (!pool) {
       throw new NotFoundException(
-        "Aucun pool de validation de mission n'est configuré pour cette unité ou ses parents — contactez le RH",
+        "Aucun pool de validation de mission n'est configuré dans l'entité à laquelle appartient cet employé (ni dans une entité parente) : contactez le RH",
       );
     }
     const sortedMembers = pool.members.slice().sort((a, b) => a.StepOrder - b.StepOrder);
@@ -657,6 +658,13 @@ export class MissionOrderService {
     approverEmployeeId: string,
     canOverride: boolean,
   ) {
+    // Garde de statut: verifiee meme pour canOverride, sinon un element
+    // annule/approuve/refuse pourrait etre re-decide (ex. ancien lien email).
+    if (!IN_APPROVAL_STATUSES.includes(missionOrder.Status)) {
+      throw new BadRequestException(
+        `Cet ordre n'est plus en attente de validation (statut "${missionOrder.Status}")`,
+      );
+    }
     if (canOverride) return;
     if (!missionOrder.ApprovalPoolId || missionOrder.CurrentApprovalStep == null) {
       throw new ForbiddenException("Cet ordre n'est pas en attente de validation");
@@ -800,10 +808,23 @@ export class MissionOrderService {
     if (!CANCELLABLE_STATUSES.includes(existing.Status)) {
       throw new BadRequestException(`Un ordre au statut "${existing.Status}" ne peut plus être annulé`);
     }
-    const updated = await this.prisma.missionOrder.update({
-      where: { Id: id },
-      data: { Status: 'Cancelled', ModifiedBy: requesterEmployeeId, ModifiedAt: new Date() },
-      include: MISSION_EMPLOYEE_INCLUDE,
+    // Cloture les decisions encore en attente pour invalider les liens email
+    // et eviter toute re-decision ulterieure.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.approvalDecision.updateMany({
+        where: { EntityType: 'MissionOrder', EntityId: id, Decision: 'Pending' },
+        data: { Decision: 'Cancelled', DecidedAt: new Date() },
+      });
+      return tx.missionOrder.update({
+        where: { Id: id },
+        data: {
+          Status: 'Cancelled',
+          CurrentApprovalStep: null,
+          ModifiedBy: requesterEmployeeId,
+          ModifiedAt: new Date(),
+        },
+        include: MISSION_EMPLOYEE_INCLUDE,
+      });
     });
     await this.notifier.notifyCancelled(this.toContext(existing), requesterEmployeeId);
     return updated;

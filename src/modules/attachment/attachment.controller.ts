@@ -12,7 +12,12 @@ export class AttachmentController {
   constructor(private readonly service: AttachmentService) {}
 
   @Post()
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_FILE_SIZE_BYTES } }))
+  // defParamCharset utf8 : sans lui, multer lit le nom de fichier envoye par le
+  // navigateur en latin1 et corrompt les accents ("certificat médical.pdf"
+  // devenait "certificat mÃ©dical.pdf", nom stocke, affiche et joint aux emails).
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: MAX_FILE_SIZE_BYTES }, defParamCharset: 'utf8' } as Record<string, unknown>),
+  )
   upload(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadAttachmentDto,

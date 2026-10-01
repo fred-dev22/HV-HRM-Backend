@@ -48,6 +48,11 @@ export interface EmailActionButton {
 export interface EmailOptions {
   accent?: EmailAccent;
   chipLabel?: string;
+  // Sous-titre affiche dans l'en-tete, sous le nom "HV" (ex: "Demande
+  // d'absence", "Ordre de mission") : par domaine plutot que fixe, voir
+  // WorkflowNotifierService. Omis pour les emails hors workflow (compte,
+  // mot de passe), l'en-tete affiche alors juste "HV" seul.
+  headerLabel?: string;
   title: string;
   // Lignes de paragraphe — chacune rendue dans un <p> distinct, peut contenir
   // du HTML simple (<strong>, etc.).
@@ -69,14 +74,28 @@ function escapeAttr(value: string): string {
   return value.replace(/"/g, '&quot;');
 }
 
+// Les valeurs du tableau "details" peuvent venir d'un texte saisi librement
+// par un employe (motif d'absence, destination, titre de note de frais...) :
+// echappees ici pour qu'un "<" ou un lien colle dans un champ ne casse pas
+// la mise en page de l'email du validateur, ni ne serve a y injecter du HTML.
+// Les retours a la ligne d'un texte multi-lignes sont conserves.
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function detailsBlockHtml(details?: EmailDetailRow[]): string {
   if (!details || details.length === 0) return '';
   const rows = details
     .map(
       (d) => `
         <tr>
-          <td style="padding:5px 0;font-size:12px;color:${COLORS.muted};width:130px;vertical-align:top;">${d.label}</td>
-          <td style="padding:5px 0;font-size:13px;color:${COLORS.text};font-weight:600;vertical-align:top;">${d.value}</td>
+          <td style="padding:5px 0;font-size:12px;color:${COLORS.muted};width:130px;vertical-align:top;">${escapeHtml(d.label)}</td>
+          <td style="padding:5px 0;font-size:13px;color:${COLORS.text};font-weight:600;vertical-align:top;">${escapeHtml(d.value).replace(/\r?\n/g, '<br/>')}</td>
         </tr>`,
     )
     .join('');
@@ -154,8 +173,11 @@ export function renderEmailHtml(opts: EmailOptions): string {
                       <img src="data:image/png;base64,${HV_LOGO_BASE64}" width="94" height="28" alt="HV" style="display:block;" />
                     </td>
                     <td>
-                      <span style="color:#ffffff;font-size:16px;font-weight:700;">Productive 247 <span style="font-weight:400;opacity:.85;">HRM</span></span><br/>
-                      <span style="color:#ffffff;font-size:11px;opacity:.8;">HV</span>
+                      ${opts.headerLabel
+                        ? `<span style="color:#ffffff;font-size:16px;font-weight:700;">${opts.headerLabel}</span><br/>
+                      <span style="color:#ffffff;font-size:11px;opacity:.8;">HV</span>`
+                        : `<span style="color:#ffffff;font-size:16px;font-weight:700;">Productive 247 <span style="font-weight:400;opacity:.85;">HRM</span></span><br/>
+                      <span style="color:#ffffff;font-size:11px;opacity:.8;">HV</span>`}
                     </td>
                   </tr>
                 </table>
@@ -190,6 +212,14 @@ export function formatDateFr(d: Date): string {
   const day = String(d.getUTCDate()).padStart(2, '0');
   const month = String(d.getUTCMonth() + 1).padStart(2, '0');
   return `${day}-${month}-${d.getUTCFullYear()}`;
+}
+
+// Suffixe "(Matin)" / "(Après-midi)" a accoler a une date de demande d'absence
+// (StartPeriod/EndPeriod : full | am | pm). Rien pour une journee entiere.
+// Partage entre l'email de notification et la page publique de validation,
+// pour que les deux affichent exactement la meme chose.
+export function periodSuffixFr(period: string): string {
+  return period === 'am' ? ' (Matin)' : period === 'pm' ? ' (Après-midi)' : '';
 }
 
 // Origine de l'app frontend (sans chemin) — pour construire les liens

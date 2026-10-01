@@ -3,7 +3,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationService } from './notification.service';
 import { MailService } from '../mail/mail.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { renderEmailHtml, frontendOrigin, type EmailAccent, type EmailDetailRow } from '../mail/email-templates';
+import { AttachmentService, type EmailAttachment } from '../attachment/attachment.service';
+import { renderEmailHtml, escapeHtml, frontendOrigin, type EmailAccent, type EmailDetailRow } from '../mail/email-templates';
 
 export type WorkflowKind = 'leave' | 'mission' | 'expense';
 
@@ -11,6 +12,15 @@ const KIND_LABEL: Record<WorkflowKind, string> = {
   leave: 'La demande de congé',
   mission: "L'ordre de mission",
   expense: 'La note de frais',
+};
+
+// Sous-titre affiche dans l'en-tete des emails, sous "HV" (retour
+// client du 23/09 : l'en-tete affichait jusque-la "Productive 247 HRM",
+// jamais rebrande pour ce client).
+const KIND_HEADER_LABEL: Record<WorkflowKind, string> = {
+  leave: "Demande d'absence",
+  mission: 'Ordre de mission',
+  expense: 'Note de frais',
 };
 
 // Ecran "mes demandes" correspondant, cote employe — le meme pour l'espace
@@ -64,6 +74,11 @@ export interface WorkflowContext {
   // final). Calculee par chaque service metier dans son toContext().
   summary: string;
   details?: EmailDetailRow[];
+  // Uniquement pour 'leave' (voir LeaveRequestService::toContext), permet
+  // de notifier l'intérimaire désigné à la soumission (retour client du
+  // 23/09 : avant, il n'était jamais informé qu'on lui avait confié un
+  // intérim, ni par email ni in-app).
+  interimEmployeeId?: string;
 }
 
 // Point d'entree unique pour les notifications in-app + email declenchees
@@ -77,7 +92,29 @@ export class WorkflowNotifierService {
     private readonly notifications: NotificationService,
     private readonly mail: MailService,
     private readonly realtime: RealtimeGateway,
+    private readonly attachments: AttachmentService,
   ) {}
+
+  // Justificatif de la demande de conge (retour client du 28/09) : joint a
+  // l'email du VALIDATEUR (nouvelle demande, ou passage au niveau suivant),
+  // pour qu'il l'ait sous les yeux sans ouvrir SharePoint. Volontairement
+  // absent des autres emails : l'interimaire n'a pas a recevoir un document
+  // potentiellement medical, et le demandeur/createur possede deja le
+  // fichier. Ne leve jamais (voir AttachmentService.loadForEmail). Les
+  // fichiers trop gros ou illisibles ne sont pas joints : une phrase en
+  // bas du message le precise et renvoie a la fiche de la demande.
+  private async justificatifsForEmail(
+    ctx: WorkflowContext,
+  ): Promise<{ attachments: EmailAttachment[]; note: string[] }> {
+    if (ctx.kind !== 'leave') return { attachments: [], note: [] };
+    const { files, skipped } = await this.attachments.loadForEmail('LeaveRequest', ctx.id);
+    const note = skipped.length
+      ? [
+          `Justificatif non joint à cet email (fichier trop volumineux ou indisponible) : ${skipped.map((n) => escapeHtml(n)).join(', ')}. Consultez-le depuis la fiche de la demande.`,
+        ]
+      : [];
+    return { attachments: files, note };
+  }
 
   // Signale a tout le monde connecte qu'une donnee pertinente pour les KPI
   // du dashboard a change (nouvelle demande, changement de statut...) — le
@@ -117,6 +154,7 @@ export class WorkflowNotifierService {
     const html = renderEmailHtml({
       accent: input.accent,
       chipLabel: input.chipLabel,
+      headerLabel: KIND_HEADER_LABEL[input.ctx.kind],
       title: input.subject,
       bodyLines: [input.message],
       details: input.ctx.details,
@@ -143,6 +181,37 @@ export class WorkflowNotifierService {
     ];
   }
 
+  // Email "a valider" envoye au validateur (avec le justificatif en piece
+  // jointe pour un conge). La preparation des pieces jointes (telechargement
+  // SharePoint) se fait ICI, dans la branche email : la notification in-app
+  // envoyee en parallele n'attend donc jamais SharePoint.
+  private async sendValidationEmail(
+    ctx: WorkflowContext,
+    to: string,
+    title: string,
+    message: string,
+    token: string,
+  ) {
+    const { attachments, note } = await this.justificatifsForEmail(ctx);
+    const html = (extraNote: string[]) =>
+      renderEmailHtml({
+        accent: 'primary', chipLabel: 'À valider', headerLabel: KIND_HEADER_LABEL[ctx.kind], title, bodyLines: [message, ...note, ...extraNote], details: ctx.details,
+        actionButtons: this.approvalActionButtons(token),
+      });
+    const sent = await this.mail.send({ to, subject: title, html: html([]), attachments });
+    // Graph peut refuser un message trop lourd avec ses pieces jointes : mieux
+    // vaut que le validateur recoive la demande sans le fichier (avec une
+    // mention) que rien du tout.
+    if (!sent && attachments.length > 0) {
+      const names = attachments.map((a) => escapeHtml(a.name)).join(', ');
+      await this.mail.send({
+        to,
+        subject: title,
+        html: html([`Justificatif non joint à cet email (message trop volumineux) : ${names}. Consultez-le depuis la fiche de la demande.`]),
+      });
+    }
+  }
+
   // Nouvelle demande soumise (ou premier niveau apres retour) : le
   // validateur du niveau courant est notifie in-app ET par email — sans
   // email, un manager qui ne garde pas l'app ouverte ne sait jamais qu'une
@@ -156,16 +225,31 @@ export class WorkflowNotifierService {
       this.resolvePerson(approverId),
     ]);
     const title = 'Nouvelle demande à valider';
-    const message = `${beneficiary.name} — ${ctx.summary} en attente de votre validation`;
+    const message = `${beneficiary.name} : ${ctx.summary} en attente de votre validation`;
     await Promise.all([
       this.notifyPeople([approver], { type: ctx.kind, title, message, href: hrefToValidate(ctx) }),
+      this.sendValidationEmail(ctx, approver.email, title, message, token),
+      this.notifyInterim(ctx, beneficiary.name),
+    ]);
+  }
+
+  // Informe l'intérimaire désigné, à la soumission : il n'était jusqu'ici
+  // jamais notifié (ni in-app ni email), retour client du 23/09. Silencieux
+  // si aucun intérimaire n'est désigné, ou pour les workflows autres que
+  // 'leave' (interimEmployeeId n'est alors jamais renseigné).
+  private async notifyInterim(ctx: WorkflowContext, beneficiaryName: string) {
+    if (!ctx.interimEmployeeId) return;
+    const interim = await this.resolvePerson(ctx.interimEmployeeId);
+    const title = 'Intérim demandé';
+    const message = `${beneficiaryName} vous a désigné comme intérimaire pendant son absence (${ctx.summary}).`;
+    await Promise.all([
+      this.notifyPeople([interim], { type: ctx.kind, title, message, href: hrefMine(ctx) }),
       this.mail.send({
-        to: approver.email,
+        to: interim.email,
         subject: title,
-        html: renderEmailHtml({
-          accent: 'primary', chipLabel: 'À valider', title, bodyLines: [message], details: ctx.details,
-          actionButtons: this.approvalActionButtons(token),
-        }),
+        // Le motif (texte libre, parfois medical) n'est pas transmis a
+        // l'interimaire, au meme titre que le justificatif.
+        html: renderEmailHtml({ accent: 'primary', chipLabel: 'Intérim', headerLabel: KIND_HEADER_LABEL[ctx.kind], title, bodyLines: [message], details: ctx.details?.filter((d) => d.label !== 'Motif') }),
       }),
     ]);
   }
@@ -182,17 +266,10 @@ export class WorkflowNotifierService {
       this.resolvePerson(nextApproverId),
     ]);
     const title = 'Nouvelle demande à valider';
-    const message = `${beneficiary.name} — ${ctx.summary} en attente de votre validation`;
+    const message = `${beneficiary.name} : ${ctx.summary} en attente de votre validation`;
     await Promise.all([
       this.notifyPeople([nextApprover], { type: ctx.kind, title, message, href: hrefToValidate(ctx) }),
-      this.mail.send({
-        to: nextApprover.email,
-        subject: title,
-        html: renderEmailHtml({
-          accent: 'primary', chipLabel: 'À valider', title, bodyLines: [message], details: ctx.details,
-          actionButtons: this.approvalActionButtons(token),
-        }),
-      }),
+      this.sendValidationEmail(ctx, nextApprover.email, title, message, token),
     ]);
     await this.notifyPeople([beneficiary, creator], {
       type: ctx.kind,
