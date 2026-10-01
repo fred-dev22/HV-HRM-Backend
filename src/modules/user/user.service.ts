@@ -67,7 +67,7 @@ export class UserService {
       return user;
     });
 
-    const title = 'Votre compte Productive 247 HRM a été créé';
+    const title = 'Votre compte HV a été créé';
     // Le retour de mail.send() n'est jamais une exception (voir MailService.send,
     // qui avale toute erreur pour ne jamais faire echouer une operation dont
     // l'email n'est qu'un effet de bord) — sans lire ce booleen ici, un envoi
@@ -84,7 +84,7 @@ export class UserService {
         title,
         bodyLines: [
           `Bonjour ${employee.FirstName},`,
-          `Un compte vous a été créé sur Productive 247 HRM.`,
+          `Un compte vous a été créé sur HV.`,
           // Ne jamais affirmer un changement obligatoire si l'admin RH a
           // decoche cette option a la creation (voir CreateUserAccountDialog.vue
           // form.mustChangePassword) — le mot de passe reste alors valable

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -26,8 +26,26 @@ interface GraphDriveItem {
 }
 
 @Injectable()
-export class SharePointService {
+export class SharePointService implements OnModuleInit {
   private readonly logger = new Logger(SharePointService.name);
+
+  // Avertit au demarrage si SharePoint n'est pas configure : les
+  // justificatifs (et les types de conge qui les exigent) en dependent.
+  onModuleInit() {
+    const required = [
+      'GRAPH_SHAREPOINT_TENANT_ID',
+      'GRAPH_SHAREPOINT_CLIENT_ID',
+      'GRAPH_SHAREPOINT_CLIENT_SECRET',
+      'GRAPH_SHAREPOINT_SITE_HOST',
+      'GRAPH_SHAREPOINT_SITE_PATH',
+      'GRAPH_SHAREPOINT_UPLOAD_PATH',
+    ].filter((name) => !process.env[name]);
+    if (required.length > 0) {
+      this.logger.warn(
+        `SharePoint non configure (variables manquantes : ${required.join(', ')}) : le televersement des justificatifs echouera.`,
+      );
+    }
+  }
   private cachedToken: { value: string; expiresAt: number } | null = null;
   private cachedDrive: { siteId: string; driveId: string } | null = null;
 
@@ -152,5 +170,38 @@ export class SharePointService {
     }
     const item = (await res.json()) as GraphDriveItem;
     return { url: item.webUrl, size: item.size };
+  }
+
+  // Relit un fichier depose par uploadFile() (ex: pour le joindre a un email).
+  // On ne stocke que le webUrl : le nom stocke sur SharePoint (uuid court +
+  // nom d'origine) en est le dernier segment, et le fichier vit sous
+  // GRAPH_SHAREPOINT_UPLOAD_PATH, exactement le chemin utilise a l'envoi.
+  // Graph repond par une redirection vers une URL de telechargement deja
+  // signee, suivie par fetch (l'en-tete Authorization n'est pas transmis a un
+  // autre domaine).
+  async downloadFile(fileUrl: string): Promise<Buffer> {
+    const { siteId, driveId } = await this.resolveDrive();
+    const token = await this.getAccessToken();
+    const uploadPath = process.env.GRAPH_SHAREPOINT_UPLOAD_PATH ?? 'Shared Documents';
+    const storedName = decodeURIComponent(new URL(fileUrl).pathname.split('/').pop() ?? '');
+    if (!storedName) {
+      throw new Error(`Nom de fichier introuvable dans l'URL SharePoint : ${fileUrl}`);
+    }
+    const encodedPath = `${uploadPath}/${storedName}`
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+
+    const res = await fetch(
+      `https://graph.microsoft.com/v1.0/sites/${siteId}/drives/${driveId}/root:/${encodedPath}:/content`,
+      // Delai maximal : la soumission d'une demande attend ce telechargement
+      // (voir WorkflowNotifierService), un SharePoint lent ne doit pas la
+      // laisser sans reponse ; le fichier est alors simplement non joint.
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) },
+    );
+    if (!res.ok) {
+      throw new Error(`Téléchargement SharePoint échoué (${res.status}) pour ${storedName}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
   }
 }

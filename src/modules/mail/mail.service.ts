@@ -45,24 +45,11 @@ export class MailService {
   // Ne leve jamais — un email qui echoue ne doit jamais faire echouer
   // l'action metier (approuver une demande, creer un compte...) qui l'a
   // declenche. Retourne juste un booleen pour le logging/tests.
-  // `attachments` (optionnel) : pieces jointes en base64, mappees vers des
-  // fileAttachment Graph — utilise pour les invitations calendrier (.ics) du
-  // module Recrutement.
-  //
-  // Piece jointe INLINE (isInline+contentId, pour un <img src="cid:...">) :
-  // teste et abandonne le 16/09 — l'appel /sendMail en un seul coup perd le
-  // contenu de la piece jointe inline en route (Graph rapporte la bonne
-  // taille cote destinataire, mais le corps de la piece jointe arrive vide,
-  // sur Gmail ET Outlook). Le contournement fiable (creer le message en
-  // brouillon via POST /messages PUIS POST /messages/{id}/send) necessite le
-  // scope applicatif Mail.ReadWrite, que cette app n'a pas aujourd'hui
-  // (seulement Mail.Send) — a activer cote Azure AD/Entra puis reintroduire
-  // ce chemin si le logo doit un jour s'afficher aussi sur Gmail (voir
-  // email-templates.ts pour le detail de l'investigation).
   async send(params: {
     to: string;
     subject: string;
     html: string;
+    // Fichiers joints (contenu en base64), voir AttachmentService.loadForEmail.
     attachments?: { name: string; contentType: string; contentBytes: string }[];
   }): Promise<boolean> {
     const sender = process.env.GRAPH_MAIL_SENDER;

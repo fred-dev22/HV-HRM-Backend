@@ -14,6 +14,7 @@ import { DecideExpenseReportDto } from './dto/decide-expense-report.dto';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 
 const EDITABLE_STATUSES = ['Draft', 'Returned'];
+const IN_APPROVAL_STATUSES = ['InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4'];
 const CANCELLABLE_STATUSES = ['Draft', 'InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4', 'Approved'];
 const DEFAULT_CURRENCY = 'MGA';
 
@@ -444,6 +445,13 @@ export class ExpenseReportService {
     approverEmployeeId: string,
     canOverride: boolean,
   ) {
+    // Garde de statut: verifiee meme pour canOverride, sinon un element
+    // annule/approuve/refuse pourrait etre re-decide (ex. ancien lien email).
+    if (!IN_APPROVAL_STATUSES.includes(report.Status)) {
+      throw new BadRequestException(
+        `Cette note n'est plus en attente de validation (statut "${report.Status}")`,
+      );
+    }
     if (canOverride) return;
     if (!report.ApprovalPoolId || report.CurrentApprovalStep == null) {
       throw new ForbiddenException("Cette note n'est pas en attente de validation");
@@ -587,10 +595,23 @@ export class ExpenseReportService {
     if (!CANCELLABLE_STATUSES.includes(existing.Status)) {
       throw new BadRequestException(`Une note au statut "${existing.Status}" ne peut plus être annulée`);
     }
-    const updated = await this.prisma.expenseReport.update({
-      where: { Id: id },
-      data: { Status: 'Cancelled', ModifiedBy: requesterEmployeeId, ModifiedAt: new Date() },
-      include: REPORT_INCLUDE,
+    // Cloture les decisions encore en attente pour invalider les liens email
+    // et eviter toute re-decision ulterieure.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.approvalDecision.updateMany({
+        where: { EntityType: 'ExpenseReport', EntityId: id, Decision: 'Pending' },
+        data: { Decision: 'Cancelled', DecidedAt: new Date() },
+      });
+      return tx.expenseReport.update({
+        where: { Id: id },
+        data: {
+          Status: 'Cancelled',
+          CurrentApprovalStep: null,
+          ModifiedBy: requesterEmployeeId,
+          ModifiedAt: new Date(),
+        },
+        include: REPORT_INCLUDE,
+      });
     });
     await this.notifier.notifyCancelled(this.toContext(existing), requesterEmployeeId);
     return updated;

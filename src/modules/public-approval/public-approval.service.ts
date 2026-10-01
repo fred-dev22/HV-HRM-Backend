@@ -3,7 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { LeaveRequestService } from '../leave-request/leave-request.service';
 import { MissionOrderService } from '../mission-order/mission-order.service';
 import { ExpenseReportService } from '../expense-report/expense-report.service';
-import { formatDateFr } from '../mail/email-templates';
+import { formatDateFr, periodSuffixFr } from '../mail/email-templates';
 import { DecidePublicApprovalDto } from './dto/decide-public-approval.dto';
 
 export interface PublicApprovalSummary {
@@ -74,11 +74,14 @@ export class PublicApprovalService {
       beneficiaryId = lr.EmployeeId;
       referenceCode = lr.ReferenceCode;
       summary = lr.leaveType?.Name ?? 'congé';
+      // Meme contenu que l'email qui a mene ici (voir LeaveRequestService::
+      // toContext) : demi-journee sur les dates, et motif saisi par l'employe.
       details = [
         { label: 'Type de congé', value: lr.leaveType?.Name ?? '-' },
-        { label: 'Du', value: formatDateFr(lr.StartDate) },
-        { label: 'Au', value: formatDateFr(lr.EndDate) },
+        { label: 'Du', value: `${formatDateFr(lr.StartDate)}${periodSuffixFr(lr.StartPeriod)}` },
+        { label: 'Au', value: `${formatDateFr(lr.EndDate)}${periodSuffixFr(lr.EndPeriod)}` },
         { label: 'Durée', value: `${Number(lr.DaysCount)} jour(s)` },
+        ...(lr.Reason?.trim() ? [{ label: 'Motif', value: lr.Reason.trim() }] : []),
       ];
     } else if (kind === 'mission') {
       const mo = await this.prisma.missionOrder.findUniqueOrThrow({ where: { Id: decision.EntityId } });
