@@ -93,9 +93,13 @@ export class ConvertContractToEmployeeDto {
   @IsUUID()
   PositionId?: string;
 
-  @IsOptional()
+  // Retour client du 19/09 : obligatoire a la conversion, determine le
+  // regime de frais/permissions par defaut d'un futur compte (voir
+  // EmployeeCreate.vue cote frontend, meme regle). Reste optionnel sur
+  // ConfirmTrialDto via PartialType ci-dessous (corps vide {} = cas courant
+  // ou l'employe existe deja et n'a donc pas besoin d'etre re-precise).
   @IsUUID()
-  EmployeeCategoryId?: string;
+  EmployeeCategoryId: string;
 
   // Regime de conges (voir Employee.IsExpatriate). Defaut false.
   @IsOptional()

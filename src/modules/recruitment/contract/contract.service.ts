@@ -25,6 +25,9 @@ const INCLUDE = {
       JobOfferId: true,
       EmployeeId: true,
       employee: { select: { Id: true, FullName: true, Status: true, IsDeleted: true } },
+      // Periode d'essai par defaut du poste (retour client du 19/09), lue a
+      // l'acceptation plutot que dupliquee sur le contrat (voir accept()).
+      jobOffer: { select: { TrialPeriodEnabled: true, TrialPeriodMonths: true } },
     },
   },
   template: { select: { Id: true, Name: true, ContractType: true } },
@@ -301,10 +304,21 @@ export class ContractService {
     if (!['Sent', 'Negotiating'].includes(existing.Status)) {
       throw new BadRequestException('Seule une proposition envoyee ou en negociation peut etre acceptee');
     }
-    // Periode d'essai facultative : creee uniquement si le RH l'a demandee.
+    // Periode d'essai facultative : creee uniquement si le RH l'a demandee
+    // (case cochee cote frontend, pre-remplie depuis JobOffer.TrialPeriodEnabled
+    // mais toujours modifiable au cas par cas ici). Duree : celle definie sur
+    // l'offre (retour client du 19/09) si elle en a une, sinon la duree par
+    // defaut de l'application.
     const withTrial = dto?.WithTrial === true;
+    const jobOffer = existing.application.JobOfferId
+      ? await this.prisma.jobOffer.findUnique({
+          where: { Id: existing.application.JobOfferId },
+          select: { TrialPeriodMonths: true },
+        })
+      : null;
+    const trialMonths = jobOffer?.TrialPeriodMonths ?? TRIAL_PERIOD_MONTHS;
     const trialEnd = new Date(existing.StartDate);
-    trialEnd.setMonth(trialEnd.getMonth() + TRIAL_PERIOD_MONTHS);
+    trialEnd.setMonth(trialEnd.getMonth() + trialMonths);
 
     const row = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.recruitmentContract.update({

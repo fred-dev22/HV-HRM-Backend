@@ -325,6 +325,7 @@ model Employee {
   // Module Recrutement (branche dev-recrutement-module)
   hiringRequestsCreated              HiringRequest[]               @relation("HiringRequestCreatedBy")
   hiringRequestsModified             HiringRequest[]               @relation("HiringRequestModifiedBy")
+  hiringRequestsRequestedFor         HiringRequest[]               @relation("HiringRequestRequestedFor")
   jobOffersCreated                   JobOffer[]                    @relation("JobOfferCreatedBy")
   jobOffersModified                  JobOffer[]                    @relation("JobOfferModifiedBy")
   interviewEvalTemplatesCreated      InterviewEvaluationTemplate[] @relation("InterviewEvalTemplateCreatedBy")
@@ -335,6 +336,7 @@ model Employee {
   interviewsCreated                  Interview[]                   @relation("InterviewCreatedBy")
   interviewsModified                 Interview[]                   @relation("InterviewModifiedBy")
   interviewParticipations            InterviewParticipant[]        @relation("InterviewParticipantEmployee")
+  interviewEvaluationsGiven          InterviewEvaluation[]         @relation("InterviewEvaluationEvaluator")
   recruitmentContractsCreated        RecruitmentContract[]         @relation("RecruitmentContractCreatedBy")
   recruitmentContractsModified       RecruitmentContract[]         @relation("RecruitmentContractModifiedBy")
   contractTemplatesCreated           ContractTemplate[]            @relation("ContractTemplateCreatedBy")
@@ -1254,6 +1256,11 @@ model HiringRequest {
   PositionId    String? @db.UniqueIdentifier
   // Status: Draft | Open | Closed | Cancelled
   Status        String @default("Draft") @db.NVarChar(20)
+  // Beneficiaire reel de la demande, distinct du createur (retour client du
+  // 19/09 : un assistant doit pouvoir exprimer un besoin pour son directeur,
+  // meme principe que LeaveRequest.EmployeeId vs CreatedBy). NULL = la
+  // demande reste au nom du createur.
+  RequestedForEmployeeId String? @db.UniqueIdentifier
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
@@ -1263,15 +1270,17 @@ model HiringRequest {
   DeletedBy  String?   @db.UniqueIdentifier
   DeletedAt  DateTime? @db.DateTime2
 
-  createdByEmployee  Employee  @relation("HiringRequestCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  modifiedByEmployee Employee? @relation("HiringRequestModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
-  position           Position? @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  createdByEmployee     Employee  @relation("HiringRequestCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  modifiedByEmployee    Employee? @relation("HiringRequestModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  requestedForEmployee  Employee? @relation("HiringRequestRequestedFor", fields: [RequestedForEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  position              Position? @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   jobOffers JobOffer[]
 
   @@index([Status])
   @@index([CreatedBy])
   @@index([PositionId])
+  @@index([RequestedForEmployeeId])
 }
 
 /// Offre d'emploi. Un stage est une offre comme une autre (ContractType =
@@ -1300,6 +1309,13 @@ model JobOffer {
   // Grille d'evaluation d'entretien rattachee (US15) — optionnelle.
   InterviewEvaluationTemplateId String?   @db.UniqueIdentifier
   PublicToken                   String    @db.NVarChar(64)
+  // Periode d'essai par defaut de ce poste (retour client du 19/09 :
+  // definie ici plutot qu'a l'acceptation de la proposition, pour remonter
+  // automatiquement dans le contrat genere, voir ContractService.accept,
+  // toujours modifiable au cas par cas a l'acceptation). TrialPeriodMonths
+  // n'a de sens que si TrialPeriodEnabled.
+  TrialPeriodEnabled            Boolean   @default(false)
+  TrialPeriodMonths             Int?
 
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
@@ -1453,7 +1469,7 @@ model Interview {
   modifiedByEmployee Employee?              @relation("InterviewModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   participants InterviewParticipant[]
-  evaluation   InterviewEvaluation?
+  evaluations  InterviewEvaluation[]
 
   @@index([ApplicationId])
   @@index([Status])
@@ -1487,18 +1503,33 @@ model InterviewParticipant {
 
 /// Evaluation d'un entretien (1 par entretien). Score global = moyenne des
 /// criteres si une grille a ete utilisee, saisi directement sinon.
+/// Evaluation d'un entretien par UN intervieweur (retour client du 19/09 :
+/// avant, une seule evaluation par entretien, la soumission d'un deuxieme
+/// intervieweur ecrasait la precedente). Une ligne par (InterviewId,
+/// EvaluatorEmployeeId) : la note globale de l'entretien est la moyenne de
+/// toutes ces lignes, calculee a la lecture (voir InterviewService.shape),
+/// jamais stockee.
 model InterviewEvaluation {
-  Id              String   @id @default(uuid()) @db.UniqueIdentifier
-  InterviewId     String   @unique @db.UniqueIdentifier
-  Score           Decimal  @db.Decimal(4, 2)
-  Comment         String   @db.NVarChar(Max)
-  InterviewerName String   @db.NVarChar(150)
-  TemplateName    String?  @db.NVarChar(150)
-  CreatedAt       DateTime @default(now()) @db.DateTime2
+  Id                  String   @id @default(uuid()) @db.UniqueIdentifier
+  InterviewId         String   @db.UniqueIdentifier
+  EvaluatorEmployeeId String   @db.UniqueIdentifier
+  Score               Decimal  @db.Decimal(4, 2)
+  Comment             String   @db.NVarChar(Max)
+  // Snapshot du nom au moment de l'evaluation (meme convention que
+  // InterviewParticipant.Name) : reste lisible meme si le compte employe
+  // est desactive/supprime par la suite.
+  InterviewerName     String   @db.NVarChar(150)
+  TemplateName        String?  @db.NVarChar(150)
+  CreatedAt           DateTime @default(now()) @db.DateTime2
+  ModifiedAt          DateTime? @db.DateTime2
 
   interview Interview @relation(fields: [InterviewId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  evaluator Employee  @relation("InterviewEvaluationEvaluator", fields: [EvaluatorEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   criteriaScores InterviewCriterionScore[]
+
+  @@unique([InterviewId, EvaluatorEmployeeId])
+  @@index([InterviewId])
 }
 
 /// Note d'un critere de grille pour une evaluation d'entretien donnee.

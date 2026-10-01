@@ -26,7 +26,9 @@ const DEFAULT_DURATION_MIN = 60;
 
 const INCLUDE = {
   participants: true,
-  evaluation: { include: { criteriaScores: true } },
+  // Une ligne par intervieweur (retour client du 19/09, voir shape() pour
+  // la note globale calculee comme moyenne de ces lignes).
+  evaluations: { include: { criteriaScores: true }, orderBy: { CreatedAt: 'asc' as const } },
   application: {
     select: {
       Id: true,
@@ -56,12 +58,22 @@ export class InterviewService {
     return row;
   }
 
-  findAll(applicationId?: string) {
-    return this.prisma.interview.findMany({
+  // Note globale = moyenne des evaluations individuelles (une par
+  // intervieweur, voir InterviewEvaluation). Calculee a la lecture plutot
+  // que stockee : jamais desynchronisee d'une evaluation ajoutee/modifiee.
+  private shape<T extends { evaluations: { Score: unknown }[] }>(row: T) {
+    const scores = row.evaluations.map((e) => Number(e.Score));
+    const globalScore = scores.length > 0 ? Math.round((scores.reduce((s, v) => s + v, 0) / scores.length) * 100) / 100 : null;
+    return { ...row, GlobalScore: globalScore };
+  }
+
+  async findAll(applicationId?: string) {
+    const rows = await this.prisma.interview.findMany({
       where: { IsDeleted: false, ...(applicationId ? { ApplicationId: applicationId } : {}) },
       include: INCLUDE,
       orderBy: { ScheduledAt: 'desc' },
     });
+    return rows.map((r) => this.shape(r));
   }
 
   async findOne(id: string) {
@@ -69,7 +81,7 @@ export class InterviewService {
     if (!row || row.IsDeleted) {
       throw new NotFoundException(`Entretien ${id} introuvable`);
     }
-    return row;
+    return this.shape(row);
   }
 
   private validateModeFields(mode: string, location?: string | null, meetingLink?: string | null) {
@@ -384,16 +396,31 @@ export class InterviewService {
       'RH';
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.interviewEvaluation.deleteMany({ where: { InterviewId: id } });
-      const evaluation = await tx.interviewEvaluation.create({
-        data: {
+      // Upsert par (InterviewId, EvaluatorEmployeeId) : chaque intervieweur
+      // soumet la sienne independamment, sans ecraser celles des autres
+      // (retour client du 19/09, avant une seule evaluation par entretien
+      // au total, la deuxieme ecrasait la premiere).
+      const evaluation = await tx.interviewEvaluation.upsert({
+        where: { InterviewId_EvaluatorEmployeeId: { InterviewId: id, EvaluatorEmployeeId: employeeId } },
+        create: {
           InterviewId: id,
+          EvaluatorEmployeeId: employeeId,
           Score: score,
           Comment: dto.Comment,
           InterviewerName: interviewer,
           TemplateName: templateName,
         },
+        update: {
+          Score: score,
+          Comment: dto.Comment,
+          InterviewerName: interviewer,
+          TemplateName: templateName,
+          ModifiedAt: new Date(),
+        },
       });
+      // Grille propre a CETTE evaluation seulement (les criteres des autres
+      // intervieweurs ne sont jamais touches).
+      await tx.interviewCriterionScore.deleteMany({ where: { EvaluationId: evaluation.Id } });
       if (criteria.length > 0) {
         await tx.interviewCriterionScore.createMany({
           data: criteria.map((c) => ({ EvaluationId: evaluation.Id, Label: c.Label, Score: c.Score })),

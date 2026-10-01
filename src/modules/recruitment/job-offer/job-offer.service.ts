@@ -62,6 +62,8 @@ export class JobOfferService {
         InterviewEvaluationTemplateId: dto.InterviewEvaluationTemplateId,
         ExcludeFromFeed: dto.ExcludeFromFeed ?? false,
         SalaryText: dto.SalaryText ?? null,
+        TrialPeriodEnabled: dto.TrialPeriodEnabled ?? false,
+        TrialPeriodMonths: dto.TrialPeriodMonths ?? null,
         Status: 'Draft',
         PublicToken: randomBytes(24).toString('hex'),
         CreatedBy: employeeId,
@@ -114,6 +116,8 @@ export class JobOfferService {
         Description: dto.Description ?? existing.Description,
         ExcludeFromFeed: dto.ExcludeFromFeed ?? existing.ExcludeFromFeed,
         SalaryText: dto.SalaryText !== undefined ? dto.SalaryText : existing.SalaryText,
+        TrialPeriodEnabled: dto.TrialPeriodEnabled ?? existing.TrialPeriodEnabled,
+        TrialPeriodMonths: dto.TrialPeriodMonths !== undefined ? dto.TrialPeriodMonths : existing.TrialPeriodMonths,
         InterviewEvaluationTemplateId:
           dto.InterviewEvaluationTemplateId !== undefined
             ? dto.InterviewEvaluationTemplateId

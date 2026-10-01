@@ -24,4 +24,11 @@ export class CreateHiringRequestDto {
   @IsOptional()
   @IsUUID()
   PositionId?: string | null;
+
+  // Beneficiaire reel de la demande si different du createur (retour client
+  // du 19/09 : un assistant peut exprimer un besoin pour son directeur).
+  // Omis ou null = la demande reste au nom du createur.
+  @IsOptional()
+  @IsUUID()
+  RequestedForEmployeeId?: string | null;
 }

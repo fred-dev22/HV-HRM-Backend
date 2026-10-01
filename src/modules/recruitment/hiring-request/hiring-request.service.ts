@@ -13,6 +13,7 @@ import { UpdateHiringRequestDto } from './dto/update-hiring-request.dto';
 
 const INCLUDE = {
   createdByEmployee: { select: { Id: true, FullName: true } },
+  requestedForEmployee: { select: { Id: true, FullName: true } },
   jobOffers: { where: { IsDeleted: false }, select: { Id: true, ReferenceCode: true, Title: true, Status: true } },
   // Sieges du poste choisi (occupes = employes titulaires non supprimes,
   // jamais stocke, meme regle que PositionService.occupiedCount) — voir shape().
@@ -88,6 +89,7 @@ export class HiringRequestService {
         Headcount: dto.Headcount,
         Profile: dto.Profile,
         PositionId: dto.PositionId ?? null,
+        RequestedForEmployeeId: dto.RequestedForEmployeeId ?? null,
         Status: 'Draft',
         CreatedBy: employeeId,
       },
@@ -132,6 +134,7 @@ export class HiringRequestService {
         Headcount: dto.Headcount ?? existing.Headcount,
         Profile: dto.Profile ?? existing.Profile,
         PositionId: dto.PositionId === undefined ? existing.PositionId : dto.PositionId,
+        RequestedForEmployeeId: dto.RequestedForEmployeeId === undefined ? existing.RequestedForEmployeeId : dto.RequestedForEmployeeId,
         ModifiedBy: employeeId,
         ModifiedAt: new Date(),
       },

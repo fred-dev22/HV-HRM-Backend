@@ -1,4 +1,4 @@
-import { IsBoolean, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsBoolean, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
 export class CreateJobOfferDto {
   @IsOptional()
@@ -44,4 +44,17 @@ export class CreateJobOfferDto {
   @IsString()
   @MaxLength(120)
   SalaryText?: string;
+
+  // Periode d'essai par defaut de ce poste (retour client du 19/09) : remonte
+  // automatiquement dans le contrat genere depuis une candidature a cette
+  // offre, modifiable au cas par cas a l'acceptation (voir ContractService.accept).
+  @IsOptional()
+  @IsBoolean()
+  TrialPeriodEnabled?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(24)
+  TrialPeriodMonths?: number;
 }
