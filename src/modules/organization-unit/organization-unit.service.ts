@@ -155,27 +155,6 @@ export class OrganizationUnitService {
     });
   }
 
-  // Voir SetLeaveApprovalModeDto — endpoint dedie, ne touche jamais Status
-  // (contrairement au PATCH generique ci-dessus). Pool par defaut ; passer en
-  // DirectValidator n'assigne aucun validateur automatiquement, une demande
-  // de conge pour un employe sans Employee.DirectValidatorId encore renseigne
-  // sera bloquee a la soumission (voir LeaveRequestService.routeToApproval).
-  async setLeaveApprovalMode(
-    id: string,
-    dto: SetLeaveApprovalModeDto,
-    modifiedBy: string,
-  ) {
-    await this.findOne(id);
-    return this.prisma.organizationUnit.update({
-      where: { Id: id },
-      data: {
-        LeaveApprovalMode: dto.LeaveApprovalMode,
-        ModifiedBy: modifiedBy,
-        ModifiedAt: new Date(),
-      },
-    });
-  }
-
   async submit(id: string, modifiedBy: string) {
     const unit = await this.findOne(id);
     if (unit.Status !== 'Draft') {
