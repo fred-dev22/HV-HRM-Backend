@@ -321,6 +321,10 @@ model Employee {
 
   notifications Notification[]
 
+  // Module Formation : inscriptions de l'employe, et demandes faites par lui
+  trainingEnrollments          TrainingEnrollment[] @relation("TrainingEnrollmentEmployee")
+  trainingEnrollmentsRequested TrainingEnrollment[] @relation("TrainingEnrollmentRequestedBy")
+
   // Module Recrutement (branche dev-recrutement-module)
   hiringRequestsCreated              HiringRequest[]               @relation("HiringRequestCreatedBy")
   hiringRequestsModified             HiringRequest[]               @relation("HiringRequestModifiedBy")
@@ -1826,4 +1830,162 @@ model ReminderDispatchLog {
 
   @@index([RecipientEmployeeId])
   @@index([DueDate])
+}
+
+// =========================================================================
+// MODULE FORMATION
+// Un seul droit ouvre tout le module (FORMATION_ACCES, voir
+// prisma/seed-data.ts), comme RECRUTEMENT_ACCES. Les colonnes d'audit
+// CreatedBy/ModifiedBy/DeletedBy sont des identifiants bruts, sans FK (aucun
+// ecran n'a besoin de les afficher), seules les references metier portent une
+// relation.
+// =========================================================================
+
+/// Prestataire de formation (organisme, cabinet, formateur independant).
+model TrainingProvider {
+  Id                  String    @id @default(uuid()) @db.UniqueIdentifier
+  Name                String    @db.NVarChar(150)
+  ContactName         String    @db.NVarChar(150)
+  Email               String    @db.NVarChar(150)
+  Phone               String    @db.NVarChar(30)
+  Specialties         String    @default("") @db.NVarChar(500)
+  // Derniere note annuelle (0 a 5) et echeance de la prochaine evaluation.
+  LastEvaluationScore Decimal?  @db.Decimal(3, 2)
+  LastEvaluationDate  DateTime? @db.Date
+  NextEvaluationDueAt DateTime  @db.Date
+  // Status: active | inactive
+  Status              String    @default("active") @db.NVarChar(10)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  courses TrainingCourse[]
+
+  @@index([Status])
+}
+
+/// Formation du catalogue.
+model TrainingCourse {
+  Id              String  @id @default(uuid()) @db.UniqueIdentifier
+  ReferenceCode   String  @unique @db.NVarChar(20)
+  Title           String  @db.NVarChar(200)
+  Category        String  @db.NVarChar(100)
+  Description     String  @db.NVarChar(Max)
+  DurationHours   Int
+  MaxParticipants Int
+  ProviderId      String? @db.UniqueIdentifier
+  // Status: InPreparation | InProgress | Archived
+  Status          String  @default("InPreparation") @db.NVarChar(20)
+  BudgetAllocated Decimal @default(0) @db.Decimal(14, 2)
+  BudgetUsed      Decimal @default(0) @db.Decimal(14, 2)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  provider TrainingProvider? @relation(fields: [ProviderId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  sessions TrainingSession[]
+
+  @@index([ProviderId])
+  @@index([Status])
+}
+
+/// Session planifiee d'une formation. Le nombre d'inscrits n'est jamais
+/// stocke : il se deduit des inscriptions qui occupent une place.
+model TrainingSession {
+  Id            String   @id @default(uuid()) @db.UniqueIdentifier
+  ReferenceCode String   @unique @db.NVarChar(20)
+  CourseId      String   @db.UniqueIdentifier
+  ScheduledAt   DateTime @db.DateTime2
+  EndAt         DateTime @db.DateTime2
+  // Mode: InPerson | VideoCall
+  Mode          String   @db.NVarChar(20)
+  Location      String?  @db.NVarChar(200)
+  MeetingLink   String?  @db.NVarChar(500)
+  TrainerName   String   @db.NVarChar(150)
+  // Status: Scheduled | Done | Cancelled
+  Status        String   @default("Scheduled") @db.NVarChar(20)
+  Capacity      Int
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  course      TrainingCourse       @relation(fields: [CourseId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  enrollments TrainingEnrollment[]
+
+  @@index([CourseId])
+  @@index([Status])
+  @@index([ScheduledAt])
+}
+
+/// Inscription d'un employe a une session (couvre la demande de formation,
+/// la presence et les deux evaluations).
+model TrainingEnrollment {
+  Id                    String    @id @default(uuid()) @db.UniqueIdentifier
+  SessionId             String    @db.UniqueIdentifier
+  EmployeeId            String    @db.UniqueIdentifier
+  RequestedByEmployeeId String    @db.UniqueIdentifier
+  RequestedAt           DateTime  @default(now()) @db.DateTime2
+  // Status: Requested | Approved | Rejected | Attended | Cancelled
+  Status                String    @default("Requested") @db.NVarChar(20)
+  AttendanceSheetSigned Boolean   @default(false)
+  // Evaluation a chaud (juste apres la session) puis a froid (3 mois plus tard).
+  HotScore              Decimal?  @db.Decimal(3, 2)
+  HotComment            String?   @db.NVarChar(1000)
+  HotDate               DateTime? @db.Date
+  ColdDueAt             DateTime? @db.Date
+  ColdScore             Decimal?  @db.Decimal(3, 2)
+  ColdComment           String?   @db.NVarChar(1000)
+  ColdDate              DateTime? @db.Date
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+
+  session     TrainingSession @relation(fields: [SessionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employee    Employee        @relation("TrainingEnrollmentEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  requestedBy Employee        @relation("TrainingEnrollmentRequestedBy", fields: [RequestedByEmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([SessionId])
+  @@index([EmployeeId])
+  @@index([Status])
+}
+
+/// Ligne du budget formation (demande budgetaire par entite et par formation).
+model TrainingBudgetLine {
+  Id            String  @id @default(uuid()) @db.UniqueIdentifier
+  Year          Int
+  EntityName    String  @db.NVarChar(150)
+  CourseTitle   String? @db.NVarChar(200)
+  Allocated     Decimal @db.Decimal(14, 2)
+  Used          Decimal @default(0) @db.Decimal(14, 2)
+  // RequestStatus: Draft | Pending | Approved | Rejected
+  RequestStatus String  @default("Pending") @db.NVarChar(20)
+  Comment       String? @db.NVarChar(500)
+
+  CreatedBy  String    @db.UniqueIdentifier
+  CreatedAt  DateTime  @default(now()) @db.DateTime2
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+  IsDeleted  Boolean   @default(false)
+  DeletedBy  String?   @db.UniqueIdentifier
+  DeletedAt  DateTime? @db.DateTime2
+
+  @@index([Year])
+  @@index([RequestStatus])
 }

@@ -29,6 +29,7 @@ import { NotificationModule } from './modules/notification/notification.module';
 import { AttachmentModule } from './modules/attachment/attachment.module';
 import { PublicApprovalModule } from './modules/public-approval/public-approval.module';
 import { RecruitmentModule } from './modules/recruitment/recruitment.module';
+import { TrainingModule } from './modules/training/training.module';
 import { RemindersModule } from './modules/reminders/reminders.module';
 import { RateLimitModule } from './common/rate-limit/rate-limit.module';
 
@@ -63,6 +64,7 @@ import { RateLimitModule } from './common/rate-limit/rate-limit.module';
     AttachmentModule,
     PublicApprovalModule,
     RecruitmentModule,
+    TrainingModule,
     RemindersModule,
   ],
   controllers: [AppController],

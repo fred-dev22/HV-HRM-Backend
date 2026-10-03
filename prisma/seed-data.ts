@@ -64,6 +64,11 @@ export const PERMISSIONS: { Code: string; Label: string; Module: string }[] = [
   { Code: 'RECRUTEMENT_ACCES', Label: 'Accéder au module Recrutement (tout faire)', Module: 'Recrutement' },
   { Code: 'RECRUTEMENT_BESOIN_VOIR', Label: 'Voir les expressions de besoin en recrutement', Module: 'Administration' },
   { Code: 'RECRUTEMENT_BESOIN_EXPRIMER', Label: 'Exprimer un besoin en recrutement', Module: 'Administration' },
+
+  // Module Formation : meme principe que le Recrutement, une seule permission
+  // ouvre tout le module (catalogue, sessions, inscriptions, evaluations,
+  // prestataires, budget).
+  { Code: 'FORMATION_ACCES', Label: 'Accéder au module Formation (tout faire)', Module: 'Formation' },
 ];
 
 export const VALIDATEUR_PERMISSIONS = [
@@ -85,6 +90,8 @@ export const ADMIN_RH_PERMISSIONS = [
   'RAPPORT_VOIR', 'RAPPORT_EXPORTER',
   // Le RH mene le recrutement de bout en bout.
   'RECRUTEMENT_ACCES',
+  // Et la formation (catalogue, sessions, inscriptions, budget).
+  'FORMATION_ACCES',
 ];
 
 export const DIRECTEUR_RH_PERMISSIONS = [
