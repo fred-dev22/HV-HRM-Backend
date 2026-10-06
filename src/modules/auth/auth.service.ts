@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes, createHash } from 'crypto';
@@ -22,6 +22,8 @@ function hashToken(token: string): string {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -127,11 +129,21 @@ export class AuthService {
     const genericResult = {
       message: 'Si un compte existe pour cet email, un lien de réinitialisation vient de lui être envoyé.',
     };
+    const email = dto.email.trim();
     const user = await this.prisma.user.findUnique({
-      where: { Email: dto.email },
+      where: { Email: email },
       include: { employee: true },
     });
-    if (!user || !user.IsActive || user.employee?.IsDeleted || user.employee?.Status === 'Inactive') {
+    // La reponse reste identique dans tous les cas (on ne revele pas si un
+    // compte existe), mais on garde la raison dans les journaux : sans cela,
+    // un employe qui ne recoit jamais son mail est impossible a diagnostiquer
+    // (ex : email du compte different de celui de la fiche).
+    if (!user) {
+      this.logger.warn(`Reinitialisation demandee pour ${email} : aucun compte de connexion avec cet email`);
+      return genericResult;
+    }
+    if (!user.IsActive || user.employee?.IsDeleted || user.employee?.Status === 'Inactive') {
+      this.logger.warn(`Reinitialisation demandee pour ${email} : compte desactive ou employe inactif/supprime`);
       return genericResult;
     }
 

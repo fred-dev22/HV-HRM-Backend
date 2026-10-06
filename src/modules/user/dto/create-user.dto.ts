@@ -15,9 +15,13 @@ export class CreateUserDto {
   @MaxLength(100)
   Username: string;
 
+  // Ignore par le serveur : l'email du compte est toujours celui de la fiche
+  // employe (voir UserService.create). Reste accepte pour ne pas casser un
+  // frontend deja deploye qui l'envoie.
+  @IsOptional()
   @IsEmail()
   @MaxLength(150)
-  Email: string;
+  Email?: string;
 
   // Plaintext password from the client — hashed into PasswordHash by the
   // service before it ever reaches Prisma. Never stored or logged as-is.

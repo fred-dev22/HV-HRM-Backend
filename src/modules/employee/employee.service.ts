@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -357,6 +358,14 @@ export class EmployeeService {
       if (positionChanged && newPositionId) {
         await this.assertPositionHasCapacity(tx, newPositionId);
       }
+      // L'email de la fiche est celui du compte de connexion (voir
+      // UserService.create) : le modifier ici doit aussi modifier le compte,
+      // sinon "Mot de passe oublie" cherche l'ancienne adresse, ne trouve rien
+      // et n'envoie aucun mail (cas rencontre chez le client : email corrige
+      // sur la fiche apres creation du compte).
+      if (dto.Email !== undefined && dto.Email !== existing.Email && existing.UserId) {
+        await this.syncAccountEmail(tx, existing.UserId, existing.Email, dto.Email);
+      }
       return tx.employee.update({
         where: { Id: id },
         data: {
@@ -367,6 +376,47 @@ export class EmployeeService {
         },
       });
     });
+  }
+
+  // Aligne le compte de connexion (User.Email, aussi l'identifiant de
+  // connexion) sur le nouvel email de la fiche. Le nom d'utilisateur suit
+  // seulement s'il valait l'ancien email (c'est le cas des comptes crees par
+  // l'application) : un nom choisi a la main n'est pas ecrase. Un lien de
+  // reinitialisation en cours est invalide : il a ete envoye a l'ancienne
+  // adresse.
+  private async syncAccountEmail(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    oldEmail: string,
+    newEmail: string,
+  ) {
+    const taken = await tx.user.findFirst({
+      where: { Email: newEmail, NOT: { Id: userId } },
+      select: { Id: true },
+    });
+    if (taken) {
+      throw new ConflictException(
+        `L'adresse ${newEmail} est déjà utilisée par un autre compte de connexion`,
+      );
+    }
+    const account = await tx.user.findUnique({
+      where: { Id: userId },
+      select: { Username: true },
+    });
+    const data: Prisma.UserUpdateInput = {
+      Email: newEmail,
+      ResetPasswordTokenHash: null,
+      ResetPasswordExpiresAt: null,
+      ModifiedAt: new Date(),
+    };
+    if (account && account.Username.toLowerCase() === oldEmail.toLowerCase()) {
+      const usernameTaken = await tx.user.findFirst({
+        where: { Username: newEmail, NOT: { Id: userId } },
+        select: { Id: true },
+      });
+      if (!usernameTaken) data.Username = newEmail;
+    }
+    await tx.user.update({ where: { Id: userId }, data });
   }
 
   // Soft delete : l'employé reste en base (Status=Inactive) — un hard delete

@@ -30,7 +30,11 @@ export class UserService {
   // copiées une seule fois dans UserPermission — un changement ultérieur de
   // la catégorie n'affectera jamais ce compte, voir decision du 29/07.
   async create(dto: CreateUserDto) {
-    const { Password, EmployeeId, EmployeeCategoryId, ...rest } = dto;
+    // L'email du compte est TOUJOURS celui de la fiche employé, jamais celui
+    // envoye par le client : c'est l'adresse a laquelle partent les mails
+    // (mot de passe oublie...) et l'identifiant de connexion, elle doit rester
+    // identique a la fiche (voir EmployeeService.update qui la maintient).
+    const { Password, EmployeeId, EmployeeCategoryId, Email: _ignoredEmail, ...rest } = dto;
 
     const employee = await this.prisma.employee.findUnique({ where: { Id: EmployeeId } });
     if (!employee) {
@@ -38,6 +42,15 @@ export class UserService {
     }
     if (employee.UserId) {
       throw new BadRequestException('Cet employé a déjà un compte d\'accès système');
+    }
+    const emailTaken = await this.prisma.user.findUnique({
+      where: { Email: employee.Email },
+      select: { Id: true },
+    });
+    if (emailTaken) {
+      throw new ConflictException(
+        `L'adresse ${employee.Email} est déjà utilisée par un autre compte de connexion`,
+      );
     }
 
     const category = await this.prisma.employeeCategory.findUnique({
@@ -52,7 +65,7 @@ export class UserService {
 
     const user = await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
-        data: { ...rest, EmployeeCategoryId, PasswordHash },
+        data: { ...rest, Email: employee.Email, EmployeeCategoryId, PasswordHash },
       });
       if (category.categoryPermissions.length > 0) {
         await tx.userPermission.createMany({
