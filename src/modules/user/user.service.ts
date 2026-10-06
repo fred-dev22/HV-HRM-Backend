@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '../../../prisma/generated/client';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -8,11 +8,14 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AssignCategoryDto } from './dto/assign-category.dto';
 import { SetUserPermissionDto } from './dto/set-user-permission.dto';
+import { generateTemporaryPassword } from '../../common/utils/temporary-password.util';
 
 const SALT_ROUNDS = 10;
 
 @Injectable()
 export class UserService {
+  private readonly logger = new Logger(UserService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
@@ -170,6 +173,51 @@ export class UserService {
       });
     }
     return this.sanitize(user);
+  }
+
+  // Reinitialisation du mot de passe par un administrateur, sans email : pour
+  // un employe qui ne recoit pas ses mails (voir "Mot de passe oublie"). Le mot
+  // de passe temporaire est genere ICI (jamais choisi par le client), renvoye
+  // une seule fois a l'administrateur qui le transmet de vive voix, et doit
+  // etre change a la premiere connexion. Il n'est ni envoye par email ni
+  // ecrit dans les journaux.
+  async resetPasswordByAdmin(id: string, requesterUserId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { Id: id },
+      include: { employee: true },
+    });
+    if (!user) {
+      throw new NotFoundException(`Utilisateur ${id} introuvable`);
+    }
+    if (user.Id === requesterUserId) {
+      throw new BadRequestException(
+        'Vous ne pouvez pas réinitialiser votre propre mot de passe ici : utilisez « Changer mon mot de passe ».',
+      );
+    }
+    // Compte de secours : il ne doit jamais pouvoir etre repris par un autre
+    // administrateur.
+    if (user.employee?.IsSystem) {
+      throw new BadRequestException(
+        'Le mot de passe du compte administrateur système ne peut pas être réinitialisé depuis l\'application.',
+      );
+    }
+
+    const temporaryPassword = generateTemporaryPassword();
+    await this.prisma.user.update({
+      where: { Id: id },
+      data: {
+        PasswordHash: await bcrypt.hash(temporaryPassword, SALT_ROUNDS),
+        MustChangePassword: true,
+        // Un lien "mot de passe oublie" deja envoye ne doit plus fonctionner.
+        ResetPasswordTokenHash: null,
+        ResetPasswordExpiresAt: null,
+        ModifiedAt: new Date(),
+      },
+    });
+    this.logger.log(
+      `Mot de passe reinitialise par l'administrateur ${requesterUserId} pour le compte ${user.Email}`,
+    );
+    return { temporaryPassword, email: user.Email };
   }
 
   async remove(id: string) {

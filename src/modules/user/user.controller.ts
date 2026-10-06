@@ -4,6 +4,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  Header,
   Param,
   Patch,
   Post,
@@ -43,6 +44,15 @@ export class UserController {
   @RequirePermission('EMPLOYE_PERMISSION_GERER')
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
     return this.service.update(id, dto);
+  }
+
+  // Meme permission que la modification d'un compte (qui permet deja de fixer
+  // un mot de passe) : aucun droit supplementaire n'est donne.
+  @Post(':id/reset-password')
+  @RequirePermission('EMPLOYE_PERMISSION_GERER')
+  @Header('Cache-Control', 'no-store')
+  resetPassword(@Param('id') id: string, @CurrentUser('sub') requesterUserId: string) {
+    return this.service.resetPasswordByAdmin(id, requesterUserId);
   }
 
   @Delete(':id')
