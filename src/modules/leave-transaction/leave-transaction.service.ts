@@ -226,7 +226,14 @@ export class LeaveTransactionService {
           IsDeleted: false,
           ...(opts?.employeeId ? { Id: opts.employeeId } : {}),
         },
-        select: { Id: true },
+        // Genre / expatrie / entite : necessaires pour ne crediter un type
+        // qu'aux employes auxquels il s'applique (voir isEligible ci-dessous).
+        select: {
+          Id: true,
+          Gender: true,
+          IsExpatriate: true,
+          OrganizationUnitId: true,
+        },
       }),
       this.prisma.leaveType.findMany({
         where: {
@@ -241,12 +248,19 @@ export class LeaveTransactionService {
       const daysPerYear = Number(leaveType.DaysPerYear);
       if (daysPerYear <= 0) continue;
 
+      // Seuls les employes concernes par le ciblage du type (genre,
+      // expatrie, entite) sont credites. Sans ce filtre, un type reserve a un
+      // genre (ex : conge maternite) etait credite a TOUS les employes : le
+      // solde restait invisible a l'ecran (l'affichage filtre deja) mais
+      // existait en base, et apparaissait des que le ciblage etait retire.
+      const eligibleEmployees = employees.filter((e) => isEligible(leaveType, e));
+
       if (leaveType.MonthlyAccrual) {
         const amount =
           leaveType.DaysPerMonth != null
             ? Number(leaveType.DaysPerMonth)
             : daysPerYear / 12;
-        for (const employee of employees) {
+        for (const employee of eligibleEmployees) {
           // Un employe ne doit recevoir qu'UN SEUL credit mensuel par
           // periode (mois calendaire) pour un type donne — sans cette
           // verification, un double declenchement le meme mois (ex: cron +
@@ -276,7 +290,7 @@ export class LeaveTransactionService {
           created++;
         }
       } else {
-        for (const employee of employees) {
+        for (const employee of eligibleEmployees) {
           const alreadyGranted = await this.prisma.leaveTransaction.findFirst({
             where: {
               EmployeeId: employee.Id,
