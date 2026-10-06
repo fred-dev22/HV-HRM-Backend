@@ -14,6 +14,7 @@ import {
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { formatDateFr, periodSuffixFr } from '../mail/email-templates';
 import { generateApprovalToken } from '../../common/approval-token';
+import { isEligible } from '../../common/utils/eligibility.util';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { DecideLeaveRequestDto } from './dto/decide-leave-request.dto';
@@ -146,6 +147,24 @@ export class LeaveRequestService {
         ...(lr.Reason?.trim() ? [{ label: 'Motif', value: lr.Reason.trim() }] : []),
       ],
     };
+  }
+
+  // Le ciblage d'un type de conge (genre, expatrie, entite) doit etre garanti
+  // par le serveur, pas seulement par l'ecran qui ne propose que les types
+  // eligibles : sans cela, un appel direct a l'API (ou un formulaire reste
+  // ouvert avec d'anciennes donnees) pouvait creer une demande de conge
+  // maternite pour un homme. Appele a la creation et quand on CHANGE le type
+  // d'un brouillon ; une demande deja existante sur un type devenu non
+  // eligible n'est pas remise en cause (voir update).
+  private assertLeaveTypeEligible(
+    leaveType: Parameters<typeof isEligible>[0] & { Name: string },
+    employee: Parameters<typeof isEligible>[1],
+  ) {
+    if (!isEligible(leaveType, employee)) {
+      throw new BadRequestException(
+        `Le type de congé « ${leaveType.Name} » ne s'applique pas à cet employé`,
+      );
+    }
   }
 
   private async generateReferenceCode(): Promise<string> {
@@ -528,6 +547,7 @@ export class LeaveRequestService {
         `Type de congé ${dto.LeaveTypeId} introuvable`,
       );
     }
+    this.assertLeaveTypeEligible(leaveType, employee);
 
     const startDate = new Date(dto.StartDate);
     const endDate = new Date(dto.EndDate);
@@ -621,6 +641,11 @@ export class LeaveRequestService {
           where: { Id: leaveTypeId },
         }),
       ]);
+      // Seulement si le type change : modifier les dates d'une demande deja
+      // creee sur un type devenu non eligible reste possible.
+      if (dto.LeaveTypeId && dto.LeaveTypeId !== existing.LeaveTypeId) {
+        this.assertLeaveTypeEligible(leaveType, employee);
+      }
       daysCount = (await this.computeWorkingDays(
         startDate,
         endDate,
