@@ -11,7 +11,7 @@ import { addMonthsUtc, nextDecemberFirst } from './training.constants';
 
 function fakePrisma(overrides: Record<string, unknown> = {}) {
   const prisma: Record<string, any> = {
-    trainingSession: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), count: jest.fn().mockResolvedValue(0), findMany: jest.fn() },
+    trainingSession: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
     trainingEnrollment: {
       findUnique: jest.fn(),
       findUniqueOrThrow: jest.fn(),
@@ -20,7 +20,7 @@ function fakePrisma(overrides: Record<string, unknown> = {}) {
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       findMany: jest.fn().mockResolvedValue([]),
     },
-    trainingCourse: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), count: jest.fn().mockResolvedValue(0) },
+    trainingCourse: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]) },
     trainingProvider: { findUnique: jest.fn(), update: jest.fn() },
     trainingBudgetLine: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
     employee: { findUnique: jest.fn() },
@@ -357,13 +357,24 @@ describe('CourseService', () => {
 
   it('cree une formation en preparation avec un code sequentiel', async () => {
     const prisma = fakePrisma();
-    prisma.trainingCourse.count.mockResolvedValue(3);
+    prisma.trainingCourse.findMany.mockResolvedValue([{ ReferenceCode: 'FOR001' }, { ReferenceCode: 'FOR002' }, { ReferenceCode: 'FOR003' }]);
     prisma.trainingCourse.create.mockResolvedValue(created);
     const result = await new CourseService(prisma as any).create(
       { title: ' T ', category: 'C', description: 'D', durationHours: 7, maxParticipants: 10, budgetAllocated: 500000 }, 'me',
     );
     expect(prisma.trainingCourse.create.mock.calls[0][0].data).toMatchObject({ ReferenceCode: 'FOR004', Title: 'T', Status: 'InPreparation' });
     expect(result).toMatchObject({ referenceCode: 'FOR004', budgetAllocated: 500000, sessionsCount: 1, createdAt: '2026-10-03' });
+  });
+
+  it('un trou dans la numerotation ne provoque pas de doublon (plus grand numero + 1)', async () => {
+    const prisma = fakePrisma();
+    // FOR002 a ete supprimee : 3 lignes restent mais le plus grand numero est 7
+    prisma.trainingCourse.findMany.mockResolvedValue([{ ReferenceCode: 'FOR001' }, { ReferenceCode: 'FOR003' }, { ReferenceCode: 'FOR007' }]);
+    prisma.trainingCourse.create.mockResolvedValue(created);
+    await new CourseService(prisma as any).create(
+      { title: 'T', category: 'C', description: 'D', durationHours: 7, maxParticipants: 10, budgetAllocated: 500000 }, 'me',
+    );
+    expect(prisma.trainingCourse.create.mock.calls[0][0].data).toMatchObject({ ReferenceCode: 'FOR008' });
   });
 
   it('refuse un prestataire inconnu', async () => {

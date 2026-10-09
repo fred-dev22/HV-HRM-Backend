@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import {
   Body,
   Controller,
@@ -18,6 +19,7 @@ import { InboundIcsDto, RsvpResponseDto } from './dto/interview-rsvp.dto';
 // permission ni JWT (voir @Public()) : l'authentification est portee par le
 // jeton opaque (RsvpToken / CandidateRsvpToken). Limitation de debit par IP
 // via le guard partage (bucket "rsvp"). Le GET est strictement en lecture.
+@RequireModule('recruitment')
 @Controller('public/interview-rsvp')
 @UseGuards(SlidingWindowRateLimitGuard)
 @RateLimit('rsvp')

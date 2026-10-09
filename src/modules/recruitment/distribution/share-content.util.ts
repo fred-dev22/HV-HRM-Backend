@@ -1,4 +1,4 @@
-import { CLIENT_SHORT_NAME } from '../recruitment.constants';
+import { clientShortName } from '../recruitment.constants';
 
 // Contenu pret a coller pour une diffusion manuelle (LinkedIn, X, intranet,
 // email cabinet). Tout en francais, aucun tiret cadratin, longueurs bornees.
@@ -71,7 +71,7 @@ function hashtag(value: string): string {
 }
 
 export function buildShareContent(offer: ShareContentOffer, publicUrl: string): ShareContent {
-  const org = CLIENT_SHORT_NAME;
+  const org = clientShortName();
   const type = contractLabel(offer.ContractType);
   const salaryLine = offer.SalaryText ? `Remuneration : ${offer.SalaryText}` : null;
 

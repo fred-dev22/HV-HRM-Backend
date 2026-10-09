@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import * as bcrypt from 'bcryptjs';
 import { Prisma } from '../../../prisma/generated/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { getBrand } from '../../config/brand';
 import { MailService } from '../mail/mail.service';
 import { renderEmailHtml, frontendOrigin } from '../mail/email-templates';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -83,7 +84,7 @@ export class UserService {
       return user;
     });
 
-    const title = 'Votre compte HV a été créé';
+    const title = `Votre compte ${getBrand().name} a été créé`;
     // Le retour de mail.send() n'est jamais une exception (voir MailService.send,
     // qui avale toute erreur pour ne jamais faire echouer une operation dont
     // l'email n'est qu'un effet de bord) — sans lire ce booleen ici, un envoi
@@ -100,7 +101,7 @@ export class UserService {
         title,
         bodyLines: [
           `Bonjour ${employee.FirstName},`,
-          `Un compte vous a été créé sur HV.`,
+          `Un compte vous a été créé sur ${getBrand().name}.`,
           // Ne jamais affirmer un changement obligatoire si l'admin RH a
           // decoche cette option a la creation (voir CreateUserAccountDialog.vue
           // form.mustChangePassword) — le mot de passe reste alors valable

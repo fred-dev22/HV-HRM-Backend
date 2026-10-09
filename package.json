@@ -7,7 +7,12 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
-    "build:iis": "prisma generate && ncc build src/main.ts -o dist/standalone -t && copy src\\modules\\mail\\hv-logo-base64.txt dist\\standalone\\ && xcopy prisma dist\\standalone\\prisma /E /I /Y",
+    "client:hv": "node scripts/apply-brand.mjs --preset deploy/hv/brand",
+    "client:reset": "node scripts/apply-brand.mjs --reset",
+    "client:new": "node scripts/new-client.mjs",
+    "client:check": "node scripts/check-instance.mjs",
+    "delivery:check": "node scripts/check-delivery.mjs",
+    "build:iis": "prisma generate && ncc build src/main.ts -o dist/standalone -t && xcopy prisma dist\\standalone\\prisma /E /I /Y",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",

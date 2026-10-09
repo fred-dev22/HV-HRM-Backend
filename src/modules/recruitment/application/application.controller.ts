@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import {
   Body,
   Controller,
@@ -32,6 +33,7 @@ const CV_UPLOAD_OPTS = {
   fileFilter: cvFileFilter,
 };
 
+@RequireModule('recruitment')
 @Controller('recruitment/applications')
 @RequirePermission('RECRUTEMENT_ACCES')
 @UseFilters(RecruitmentUploadExceptionFilter)
@@ -129,6 +131,7 @@ export class ApplicationController {
 // Cote espace employe (US12) : postuler en interne + suivre ses candidatures
 // internes. Aucune permission recrutement requise — n'importe quel employe
 // connecte peut postuler a une offre publiee.
+@RequireModule('recruitment')
 @Controller('recruitment/my-applications')
 export class MyApplicationsController {
   constructor(private readonly service: ApplicationService) {}

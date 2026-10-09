@@ -3,7 +3,7 @@ import type { DistributionChannel, JobOffer, JobOfferDistribution } from '../../
 import { PrismaService } from '../../../prisma/prisma.service';
 import { MailService } from '../../mail/mail.service';
 import { frontendOrigin, renderEmailHtml } from '../../mail/email-templates';
-import { CLIENT_SHORT_NAME, FEED_DESCRIPTION_MAX, WEBHOOK_TIMEOUT_MS } from '../recruitment.constants';
+import { clientShortName, FEED_DESCRIPTION_MAX, WEBHOOK_TIMEOUT_MS } from '../recruitment.constants';
 import { resolvePortalAuthorId } from '../recruitment.util';
 import { capFeedText } from './job-feed.util';
 import { buildShareContent } from './share-content.util';
@@ -283,8 +283,8 @@ export class DistributionDispatchService {
         ok = await this.mail.send({
           to: channel.TargetEmail,
           subject: closing
-            ? `Offre cloturee : ${offer.Title} (${CLIENT_SHORT_NAME})`
-            : `Nouvelle offre a diffuser : ${offer.Title} (${CLIENT_SHORT_NAME})`,
+            ? `Offre cloturee : ${offer.Title} (${clientShortName()})`
+            : `Nouvelle offre a diffuser : ${offer.Title} (${clientShortName()})`,
           html: renderEmailHtml({
             accent: closing ? 'danger' : 'primary',
             chipLabel: 'Diffusion',

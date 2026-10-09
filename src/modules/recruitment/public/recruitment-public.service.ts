@@ -107,7 +107,7 @@ export class RecruitmentPublicService {
 
   private async refCode() {
     return nextReferenceCode(REFERENCE_PREFIXES.application, (p) =>
-      this.prisma.recruitmentApplication.count({ where: { ReferenceCode: { startsWith: p } } }),
+      this.prisma.recruitmentApplication.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
     );
   }
 

@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
@@ -8,6 +9,7 @@ import { UpdateJobOfferDistributionDto } from './dto/distribution.dto';
 // de JobOfferController (memes chemins /recruitment/job-offers/:id/...),
 // meme permission de classe. job-offer.controller.ts reste concentre sur le
 // cycle de vie de l'offre.
+@RequireModule('recruitment')
 @Controller('recruitment/job-offers/:id')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class JobOfferDistributionController {

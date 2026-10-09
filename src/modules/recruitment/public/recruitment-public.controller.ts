@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import {
   Body,
   Controller,
@@ -32,6 +33,7 @@ const CV_INTERCEPTOR = FileInterceptor('cv', {
 // formulaire, Turnstile), tous pilotes par l'environnement, defauts permissifs.
 @UseGuards(SlidingWindowRateLimitGuard)
 @UseFilters(RecruitmentUploadExceptionFilter)
+@RequireModule('recruitment')
 @Controller('public/careers')
 export class RecruitmentPublicController {
   constructor(private readonly service: RecruitmentPublicService) {}

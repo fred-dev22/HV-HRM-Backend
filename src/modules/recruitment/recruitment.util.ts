@@ -5,14 +5,22 @@ import { PrismaService } from '../../prisma/prisma.service';
 // (ex: OFF001, CAN001...) — meme convention que le matricule employe
 // (EmployeeService.generateEmployeeNumber -> EMP001, module Administration).
 // Remplace l'ancien format PREFIX-ANNEE-00001 (demande client du 11/09).
-// `countWithPrefix` compte les lignes deja existantes pour ce prefixe
-// (jamais remis a zero par annee, comme EMP).
+// `existingWithPrefix` renvoie les codes deja attribues pour ce prefixe
+// (jamais remis a zero par annee, comme EMP). Le numero suivant est le PLUS
+// GRAND numero existant + 1, et non le nombre de lignes + 1 : apres la
+// suppression d'une ligne, le comptage retombait sur un numero deja pris et
+// toute creation echouait ("Cette valeur est deja utilisee").
 export async function nextReferenceCode(
   prefix: string,
-  countWithPrefix: (startsWith: string) => Promise<number>,
+  existingWithPrefix: (startsWith: string) => Promise<{ ReferenceCode: string }[]>,
 ): Promise<string> {
-  const count = await countWithPrefix(prefix);
-  return `${prefix}${String(count + 1).padStart(3, '0')}`;
+  const rows = await existingWithPrefix(prefix);
+  let max = 0;
+  for (const row of rows) {
+    const n = Number.parseInt(row.ReferenceCode.slice(prefix.length), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`;
 }
 
 // nextReferenceCode est base sur un count() : deux creations concurrentes

@@ -1,0 +1,10 @@
+{
+  "name": "HV",
+  "short": "HV",
+  "color": "#ef463b",
+  "accent": "#7a1f1f",
+  "background": "#fdeae8",
+  "tint": "#fdeae8",
+  "logo": "logo.png",
+  "modules": ["recruitment", "training"]
+}

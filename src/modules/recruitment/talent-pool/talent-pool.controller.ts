@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { TalentPoolService } from './talent-pool.service';
 import {
@@ -8,6 +9,7 @@ import {
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 
+@RequireModule('recruitment')
 @Controller('recruitment/talent-pool')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class TalentPoolController {

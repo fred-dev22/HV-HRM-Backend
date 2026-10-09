@@ -56,7 +56,7 @@ export class TalentPoolService {
     const row = await this.prisma.talentPoolEntry.create({
       data: {
         ReferenceCode: await nextReferenceCode(REFERENCE_PREFIXES.talentPool, (p) =>
-          this.prisma.talentPoolEntry.count({ where: { ReferenceCode: { startsWith: p } } }),
+          this.prisma.talentPoolEntry.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
         ),
         CandidateName: dto.CandidateName,
         CandidateEmail: dto.CandidateEmail,

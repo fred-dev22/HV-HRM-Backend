@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { TrialService } from './trial.service';
 import { EvaluateTrialDto, ExtendTrialDto } from './dto/trial.dto';
@@ -6,6 +7,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 import { CurrentPermissions } from '../../../common/decorators/current-permissions.decorator';
 
+@RequireModule('recruitment')
 @Controller('recruitment/trial-employees')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class TrialController {

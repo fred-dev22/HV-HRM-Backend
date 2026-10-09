@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
@@ -6,6 +7,7 @@ import { CreateDistributionChannelDto, UpdateDistributionChannelDto } from './dt
 
 // RECRUTEMENT_ACCES ouvre tout le module (decision client du 05/09) : une
 // seule permission de classe.
+@RequireModule('recruitment')
 @Controller('recruitment/distribution-channels')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class DistributionChannelController {

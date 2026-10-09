@@ -178,7 +178,7 @@ export class ContractService {
     const row = await this.prisma.recruitmentContract.create({
       data: {
         ReferenceCode: await nextReferenceCode(REFERENCE_PREFIXES.contract, (p) =>
-          this.prisma.recruitmentContract.count({ where: { ReferenceCode: { startsWith: p } } }),
+          this.prisma.recruitmentContract.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
         ),
         ApplicationId: dto.ApplicationId,
         TemplateId: dto.TemplateId,
@@ -334,7 +334,7 @@ export class ContractService {
         await tx.trialEmployee.create({
           data: {
             ReferenceCode: await nextReferenceCode(REFERENCE_PREFIXES.trial, (p) =>
-              tx.trialEmployee.count({ where: { ReferenceCode: { startsWith: p } } }),
+              tx.trialEmployee.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
             ),
             ContractId: id,
             EmployeeName: existing.CandidateName,

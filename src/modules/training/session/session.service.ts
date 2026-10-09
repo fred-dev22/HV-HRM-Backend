@@ -102,7 +102,7 @@ export class SessionService {
       this.prisma.trainingSession.create({
         data: {
           ReferenceCode: await nextReferenceCode(TRAINING_REFERENCE_PREFIXES.session, (p) =>
-            this.prisma.trainingSession.count({ where: { ReferenceCode: { startsWith: p } } }),
+            this.prisma.trainingSession.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
           ),
           CourseId: dto.courseId,
           ScheduledAt: start,

@@ -1,3 +1,5 @@
+import { getBrand } from '../../config/brand';
+
 // Constantes partagees du module Recrutement. Aucun circuit de validation
 // (decision client du 05/09) : les jeux de statuts sont volontairement
 // courts, et il n'y a pas d'etape "approuver / refuser" sur une offre ni
@@ -35,10 +37,10 @@ export const APPLICATION_EDITABLE_STATUSES = ['New', 'InReview'];
 // automatique lorsqu'une proposition d'embauche est acceptee.
 export const TRIAL_PERIOD_MONTHS = 2;
 
-// Rendu client : "Galana" devient "HV" dans tout le module (retour reunion
-// du 05/09). Applique aux libelles seedes (modeles de contrat) et a tout
-// texte genere cote backend.
-export const CLIENT_SHORT_NAME = 'HV';
+// Nom court de la marque, utilise dans les textes generes cote backend du
+// module (flux d'offres, contenus a partager, notifications). Vient de
+// BRAND_SHORT_NAME : voir config/brand.ts.
+export const clientShortName = (): string => getBrand().shortName;
 
 // ── Diffusion multi-plateformes des offres (backlog) ────────────────────
 export const DISTRIBUTION_CHANNEL_KINDS = ['Webhook', 'RssOnly', 'Manual', 'Email'] as const;

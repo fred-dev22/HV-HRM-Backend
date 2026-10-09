@@ -1,3 +1,4 @@
+import { RequireModule } from '../../common/modules/require-module.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { MissionOrderService } from './mission-order.service';
 import { CreateMissionOrderDto } from './dto/create-mission-order.dto';
@@ -6,7 +7,9 @@ import { DecideMissionOrderDto } from './dto/decide-mission-order.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CurrentPermissions } from '../../common/decorators/current-permissions.decorator';
+import { assertMayCreateForOthers } from '../../common/utils/act-for-other.util';
 
+@RequireModule('missions_expenses')
 @Controller('mission-orders')
 export class MissionOrderController {
   constructor(private readonly service: MissionOrderService) {}
@@ -15,7 +18,9 @@ export class MissionOrderController {
   create(
     @Body() dto: CreateMissionOrderDto,
     @CurrentUser('employeeId') employeeId: string,
+    @CurrentPermissions() permissions: Set<string>,
   ) {
+    assertMayCreateForOthers(dto.EmployeeId, employeeId, permissions, 'MISSION_CREER_POUR_AUTRE');
     return this.service.create(dto, employeeId);
   }
 

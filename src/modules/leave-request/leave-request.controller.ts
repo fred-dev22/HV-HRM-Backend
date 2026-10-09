@@ -6,6 +6,7 @@ import { DecideLeaveRequestDto } from './dto/decide-leave-request.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CurrentPermissions } from '../../common/decorators/current-permissions.decorator';
+import { assertMayCreateForOthers } from '../../common/utils/act-for-other.util';
 
 @Controller('leave-requests')
 export class LeaveRequestController {
@@ -15,7 +16,9 @@ export class LeaveRequestController {
   create(
     @Body() dto: CreateLeaveRequestDto,
     @CurrentUser('employeeId') employeeId: string,
+    @CurrentPermissions() permissions: Set<string>,
   ) {
+    assertMayCreateForOthers(dto.EmployeeId, employeeId, permissions, 'CONGE_CREER_POUR_AUTRE');
     return this.service.create(dto, employeeId);
   }
 

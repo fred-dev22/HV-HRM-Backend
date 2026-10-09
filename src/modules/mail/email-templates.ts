@@ -1,36 +1,46 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { getBrand, getBrandLogo, tint } from '../../config/brand';
 
-// Logo HV embarque en base64 (evite toute dependance a une image
-// hebergee publiquement — Outlook/OWA en particulier bloque volontiers les
-// images externes par defaut). Fichier .txt a cote de ce module, copie
-// automatiquement dans dist/ par Nest (assets non-.ts).
+// Le logo, le nom et la couleur viennent de la marque de l'instance (variables
+// BRAND_*, voir config/brand.ts) et sont lus a chaque envoi : changer de
+// client ne demande aucun changement de code. Le logo est integre en base64
+// (evite toute dependance a une image hebergee publiquement : Outlook/OWA
+// bloque volontiers les images externes par defaut).
 //
-// ISSUE CONNUE (15-16/09) : un <img src="data:..."> comme ci-dessous
-// s'affiche bien sur Outlook mais Gmail (web + appli mobile) retire les
-// images en data URI du HTML recu, par mesure anti-spam — logo absent sur
-// Gmail. Tentative de fix : logo en piece jointe inline (Content-ID) +
-// <img src="cid:...">, seule technique fiable sur Gmail ET Outlook en
-// theorie. ECHEC EN CONDITIONS REELLES : verifie par test (16/09) que
-// l'appel Graph POST /sendMail en un seul coup perd le contenu de la piece
-// jointe inline en route (Graph rapporte bien la bonne taille cote
-// destinataire, mais le corps de la piece jointe arrive vide — aucun
-// client, ni Gmail ni Outlook, ne peut donc l'afficher). Le contournement
-// standard (creer le message en brouillon PUIS l'envoyer, POST /messages
-// + POST /messages/{id}/send) fonctionne mais necessite le scope
-// applicatif Mail.ReadWrite cote Azure AD/Entra, que cette app n'a pas
-// aujourd'hui (seulement Mail.Send) — voir mail.service.ts, deja pret a
-// basculer sur ce chemin fiable des que le scope sera accorde.
-// EN ATTENDANT : revenu au data URI (marche sur Outlook, pas sur Gmail —
-// c'etait deja le cas avant cette investigation, pas une regression).
-const HV_LOGO_BASE64 = readFileSync(join(__dirname, 'hv-logo-base64.txt'), 'utf-8').trim();
+// ISSUE CONNUE (15-16/09) : un <img src="data:..."> s'affiche bien sur Outlook
+// mais Gmail (web + appli mobile) retire les images en data URI du HTML recu,
+// par mesure anti-spam. La piece jointe inline (Content-ID) ne fonctionne pas
+// non plus via un appel Graph /sendMail unique (le contenu arrive vide) ;
+// le contournement (brouillon puis envoi) demande le scope applicatif
+// Mail.ReadWrite, que l'app n'a pas aujourd'hui. Voir mail.service.ts.
+function logoDataUri(): { src: string; width: number | null; height: number } | null {
+  const logo = getBrandLogo();
+  // Pas de logo configure pour ce client : l'en-tete reste sans image.
+  if (!logo) return null;
+  // Hauteur fixe dans l'en-tete ; la largeur suit les proportions du fichier.
+  const height = 28;
+  const width = logo.width && logo.height ? Math.round((logo.width / logo.height) * height) : null;
+  return { src: `data:${logo.mime};base64,${logo.buffer.toString('base64')}`, width, height };
+}
 
-// Palette alignee sur src/assets/main.css du frontend (theme "Rouge HV").
+// La couleur principale et la couleur d'alerte suivent la marque
+// (BRAND_PRIMARY_COLOR / BRAND_ACCENT_COLOR, neutres par defaut), lues a chaque
+// envoi ; les fonds clairs en sont derives. Aucune couleur de client ici.
 const COLORS = {
-  primary: '#ef463b',
-  primaryBg: '#fdeae8',
-  danger: '#7a1f1f',
-  dangerBg: '#f1e2df',
+  get primary() {
+    return getBrand().primaryColor;
+  },
+  get primaryBg() {
+    return tint(getBrand().primaryColor, 0.9);
+  },
+  get pageBg() {
+    return getBrand().backgroundColor ?? '#f4f4f5';
+  },
+  get danger() {
+    return getBrand().accentColor;
+  },
+  get dangerBg() {
+    return tint(getBrand().accentColor, 0.88);
+  },
   warning: '#8a5a0a',
   warningBg: '#fef5e1',
   info: '#185fa5',
@@ -39,17 +49,22 @@ const COLORS = {
   text: '#1a1a1a',
   muted: '#6b6b68',
   border: '#e6e6e4',
-  pageBg: '#f6f2f2',
 };
 
 export type EmailAccent = 'primary' | 'danger' | 'warning' | 'info';
 
-const ACCENT_COLORS: Record<EmailAccent, { fg: string; bg: string }> = {
-  primary: { fg: COLORS.primary, bg: COLORS.primaryBg },
-  danger: { fg: COLORS.danger, bg: COLORS.dangerBg },
-  warning: { fg: COLORS.warning, bg: COLORS.warningBg },
-  info: { fg: COLORS.info, bg: COLORS.infoBg },
-};
+function accentColors(accent: EmailAccent): { fg: string; bg: string } {
+  switch (accent) {
+    case 'danger':
+      return { fg: COLORS.danger, bg: COLORS.dangerBg };
+    case 'warning':
+      return { fg: COLORS.warning, bg: COLORS.warningBg };
+    case 'info':
+      return { fg: COLORS.info, bg: COLORS.infoBg };
+    default:
+      return { fg: COLORS.primary, bg: COLORS.primaryBg };
+  }
+}
 
 export interface EmailDetailRow {
   label: string;
@@ -65,10 +80,10 @@ export interface EmailActionButton {
 export interface EmailOptions {
   accent?: EmailAccent;
   chipLabel?: string;
-  // Sous-titre affiche dans l'en-tete, sous le nom "HV" (ex: "Demande
+  // Sous-titre affiche dans l'en-tete, sous le nom de la marque (ex: "Demande
   // d'absence", "Ordre de mission") : par domaine plutot que fixe, voir
   // WorkflowNotifierService. Omis pour les emails hors workflow (compte,
-  // mot de passe), l'en-tete affiche alors juste "HV" seul.
+  // mot de passe), l'en-tete affiche alors juste le nom de la marque.
   headerLabel?: string;
   title: string;
   // Lignes de paragraphe — chacune rendue dans un <p> distinct, peut contenir
@@ -162,12 +177,14 @@ function actionButtonsHtml(buttons?: EmailActionButton[]): string {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 8px;">${rows}</table>`;
 }
 
-// Gabarit HTML partage par tous les emails de l'app — en-tete rouge HV
+// Gabarit HTML partage par tous les emails de l'app — en-tete aux couleurs de la marque
 // avec logo, corps blanc, pied de page discret. Mise en page en tables +
 // styles inline uniquement (pas de <style>, pas de flexbox) pour un rendu
 // fiable sur Outlook desktop comme sur les webmails modernes.
 export function renderEmailHtml(opts: EmailOptions): string {
-  const accent = ACCENT_COLORS[opts.accent ?? 'primary'];
+  const accent = accentColors(opts.accent ?? 'primary');
+  const brand = getBrand();
+  const logo = logoDataUri();
   const chip = opts.chipLabel
     ? `<div style="display:inline-block;background:${accent.bg};color:${accent.fg};font-size:11px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;padding:4px 10px;border-radius:20px;margin-bottom:14px;">${opts.chipLabel}</div>`
     : '';
@@ -186,24 +203,24 @@ export function renderEmailHtml(opts: EmailOptions): string {
               <td style="background:${COLORS.primary};padding:18px 28px;">
                 <table role="presentation" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td style="padding-right:12px;">
-                      <!-- Plaque blanche derriere le logo : le trait du logo est
-                           quasiment le meme rouge que ce bandeau (${COLORS.primary}),
-                           invisible dessus sans ce fond clair. -->
+                    ${logo
+                      ? `<td style="padding-right:12px;">
+                      <!-- Plaque blanche derriere le logo : evite qu'un logo de la couleur du bandeau (${COLORS.primary}) disparaisse. -->
                       <table role="presentation" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:6px;">
                         <tr>
                           <td style="padding:5px 8px;">
-                            <img src="data:image/png;base64,${HV_LOGO_BASE64}" width="76" height="23" alt="HV" style="display:block;" />
+                            <img src="${logo.src}" ${logo.width ? `width="${logo.width}" ` : ''}height="${logo.height}" alt="${escapeHtml(brand.name)}" style="display:block;height:${logo.height}px;" />
                           </td>
                         </tr>
                       </table>
-                    </td>
+                    </td>`
+                      : ''}
                     <td>
                       ${opts.headerLabel
                         ? `<span style="color:#ffffff;font-size:16px;font-weight:700;">${opts.headerLabel}</span><br/>
-                      <span style="color:#ffffff;font-size:11px;opacity:.8;">HV</span>`
+                      <span style="color:#ffffff;font-size:11px;opacity:.8;">${escapeHtml(brand.name)}</span>`
                         : `<span style="color:#ffffff;font-size:16px;font-weight:700;">Productive 247 <span style="font-weight:400;opacity:.85;">HRM</span></span><br/>
-                      <span style="color:#ffffff;font-size:11px;opacity:.8;">HV</span>`}
+                      <span style="color:#ffffff;font-size:11px;opacity:.8;">${escapeHtml(brand.name)}</span>`}
                     </td>
                   </tr>
                 </table>
@@ -221,7 +238,7 @@ export function renderEmailHtml(opts: EmailOptions): string {
             </tr>
             <tr>
               <td style="padding:16px 28px 22px;border-top:1px solid ${COLORS.border};margin-top:8px;">
-                <p style="margin:0;font-size:11px;color:${COLORS.muted};">Productive 247 HRM - HV. Cet email est généré automatiquement, merci de ne pas y répondre directement.</p>
+                <p style="margin:0;font-size:11px;color:${COLORS.muted};">Productive 247 HRM - ${escapeHtml(brand.name)}. Cet email est généré automatiquement, merci de ne pas y répondre directement.</p>
               </td>
             </tr>
           </table>

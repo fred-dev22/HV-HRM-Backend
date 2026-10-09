@@ -745,6 +745,14 @@ model LeaveType {
   // chargedWorkingDays (frontend, apercu) qui doivent rester en miroir.
   CountCalendarDays Boolean @default(false)
 
+  // Solde insuffisant (retour client du 08/10) : true (par defaut) = la demande
+  // ne peut pas etre SOUMISE quand le solde ne couvre pas les jours demandes
+  // (bouton grise cote ecran, refus cote serveur ; le brouillon reste possible).
+  // false = la demande part quand meme et le validateur est averti. Sans effet
+  // sur un type sans quota (DaysPerYear <= 0) : pas de solde a respecter. Le
+  // preavis minimum, lui, n'est jamais bloquant.
+  BlockIfInsufficientBalance Boolean @default(true)
+
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier

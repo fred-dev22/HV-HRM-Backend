@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { isModuleEnabled } from '../../common/modules/modules.config';
 import { RemindersRangeDto } from './dto/reminders-range.dto';
 import {
   addDays,
@@ -194,7 +195,9 @@ export class RemindersService {
 
     // 4) + 5) : perimetre RH complet uniquement (ces entites n'ont pas de lien
     // vers une unite organisationnelle, leur EntityName est du texte libre).
-    if (scope.allUnits) {
+    // Essais et contrats appartiennent au module Recrutement : rien a rappeler
+    // quand il est coupe pour ce client.
+    if (scope.allUnits && isModuleEnabled('recruitment')) {
       const trials = await this.prisma.trialEmployee.findMany({
         where: {
           IsDeleted: false,

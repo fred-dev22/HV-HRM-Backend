@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { DistributionDispatchService } from './distribution-dispatch.service';
+import { isModuleEnabled } from '../../../common/modules/modules.config';
 
 // Relance quotidienne des webhooks en echec. LIVRE DESACTIVE : no-op tant que
 // process.env.DISTRIBUTION_AUTO_RETRY !== '1'. Quand actif : rejoue une fois
@@ -19,6 +20,7 @@ export class DistributionRetrySchedulerService {
   @Cron(CronExpression.EVERY_DAY_AT_6AM)
   async handleDailyRetry(): Promise<void> {
     if (process.env.DISTRIBUTION_AUTO_RETRY !== '1') return;
+    if (!isModuleEnabled('recruitment')) return;
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
       const rows = await this.prisma.jobOfferDistribution.findMany({

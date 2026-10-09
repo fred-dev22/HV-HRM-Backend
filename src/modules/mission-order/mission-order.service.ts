@@ -10,6 +10,7 @@ import { ApprovalPoolService } from '../approval-pool/approval-pool.service';
 import { WorkflowNotifierService, WorkflowContext } from '../notification/workflow-notifier.service';
 import { formatDateFr } from '../mail/email-templates';
 import { generateApprovalToken } from '../../common/approval-token';
+import { nextReferenceCode, retryOnReferenceCodeConflict } from '../../common/utils/reference-code.util';
 import { CreateMissionOrderDto } from './dto/create-mission-order.dto';
 import { UpdateMissionOrderDto } from './dto/update-mission-order.dto';
 import { DecideMissionOrderDto } from './dto/decide-mission-order.dto';
@@ -85,10 +86,12 @@ export class MissionOrderService {
   private async generateReferenceCode(client: TxClient = this.prisma): Promise<string> {
     const year = new Date().getFullYear();
     const prefix = `OM-${year}-`;
-    const count = await client.missionOrder.count({
+    const last = await client.missionOrder.findFirst({
       where: { ReferenceCode: { startsWith: prefix } },
+      orderBy: { ReferenceCode: 'desc' },
+      select: { ReferenceCode: true },
     });
-    return `${prefix}${String(count + 1).padStart(5, '0')}`;
+    return nextReferenceCode(prefix, last?.ReferenceCode);
   }
 
   // DepartureDate/ReturnDate sont des dates pures (sans heure) — duree
@@ -267,32 +270,33 @@ export class MissionOrderService {
     };
 
     if (!dto.AssociatedEmployeeId) {
-      const referenceCode = await this.generateReferenceCode();
-      return this.prisma.missionOrder.create({
-        data: {
-          ...baseData,
-          ReferenceCode: referenceCode,
-          EmployeeId: employeeId,
-          AdvanceRequested: dto.AdvanceRequested ?? 0,
-          missionExpenseLines: dto.ExpenseLines?.length
-            ? {
-                create: dto.ExpenseLines.map((l) => ({
-                  ExpenseTypeId: l.ExpenseTypeId,
-                  Description: l.Description,
-                  Amount: l.Amount,
-                  CreatedBy: requesterEmployeeId,
-                })),
-              }
-            : undefined,
-        },
-        include: MISSION_EMPLOYEE_INCLUDE,
-      });
+      return retryOnReferenceCodeConflict(async () =>
+        this.prisma.missionOrder.create({
+          data: {
+            ...baseData,
+            ReferenceCode: await this.generateReferenceCode(),
+            EmployeeId: employeeId,
+            AdvanceRequested: dto.AdvanceRequested ?? 0,
+            missionExpenseLines: dto.ExpenseLines?.length
+              ? {
+                  create: dto.ExpenseLines.map((l) => ({
+                    ExpenseTypeId: l.ExpenseTypeId,
+                    Description: l.Description,
+                    Amount: l.Amount,
+                    CreatedBy: requesterEmployeeId,
+                  })),
+                }
+              : undefined,
+          },
+          include: MISSION_EMPLOYEE_INCLUDE,
+        }),
+      );
     }
 
     // Cree les deux ordres (titulaire + accompagnant) et les lie
     // symetriquement en une seule transaction — chacun suit ensuite son
     // propre workflow d'approbation independant (voir cascade dans submit()).
-    const { primaryId, associateId } = await this.prisma.$transaction(async (tx) => {
+    const { primaryId, associateId } = await retryOnReferenceCodeConflict(() => this.prisma.$transaction(async (tx) => {
       const primaryCode = await this.generateReferenceCode(tx);
       const primary = await tx.missionOrder.create({
         data: {
@@ -324,7 +328,7 @@ export class MissionOrderService {
       await tx.missionOrder.update({ where: { Id: primary.Id }, data: { LinkedMissionOrderId: associate.Id } });
       await tx.missionOrder.update({ where: { Id: associate.Id }, data: { LinkedMissionOrderId: primary.Id } });
       return { primaryId: primary.Id, associateId: associate.Id };
-    });
+    }));
 
     // Email a l'accompagnant en dehors de la transaction (best-effort) : un
     // echec d'envoi ne doit pas faire echouer la creation, deja actee en

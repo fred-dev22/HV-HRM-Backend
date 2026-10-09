@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { Prisma } from '../../../../prisma/generated/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { RecruitmentNotifyService } from '../recruitment-notify.service';
-import { REFERENCE_PREFIXES } from '../recruitment.constants';
+import { clientShortName, REFERENCE_PREFIXES } from '../recruitment.constants';
 import { nextReferenceCode } from '../recruitment.util';
 import { generateApprovalToken } from '../../../common/approval-token';
 import { InterviewRsvpService } from './interview-rsvp.service';
@@ -117,7 +117,7 @@ export class InterviewService {
       select: { FullName: true, Email: true },
     });
     return {
-      name: me?.FullName ?? 'Recrutement HV',
+      name: me?.FullName ?? `Recrutement ${clientShortName()}`,
       email: me?.Email ?? process.env.GRAPH_MAIL_SENDER ?? 'no-reply@localhost',
     };
   }
@@ -143,7 +143,7 @@ export class InterviewService {
       const interview = await tx.interview.create({
         data: {
           ReferenceCode: await nextReferenceCode(REFERENCE_PREFIXES.interview, (p) =>
-            tx.interview.count({ where: { ReferenceCode: { startsWith: p } } }),
+            tx.interview.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
           ),
           ApplicationId: dto.ApplicationId,
           ScheduledAt: start,

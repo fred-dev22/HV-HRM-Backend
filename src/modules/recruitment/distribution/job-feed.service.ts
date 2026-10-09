@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { frontendOrigin } from '../../mail/email-templates';
 import {
-  CLIENT_SHORT_NAME,
+  clientShortName,
   FEED_DESCRIPTION_MAX,
   FEED_RENDER_TTL_MS,
 } from '../recruitment.constants';
@@ -25,7 +25,7 @@ export class JobFeedService {
   constructor(private readonly prisma: PrismaService) {}
 
   private feedTitle(): string {
-    return process.env.FEED_TITLE?.trim() || `Offres d'emploi ${CLIENT_SHORT_NAME}`;
+    return process.env.FEED_TITLE?.trim() || `Offres d'emploi ${clientShortName()}`;
   }
 
   private origin(): string {
@@ -41,7 +41,7 @@ export class JobFeedService {
       homePageUrl: `${origin}/careers`,
       feedUrlJson: `${origin}/api/public/careers/feed.json`,
       feedUrlXml: `${origin}/api/public/careers/feed.xml`,
-      publisher: CLIENT_SHORT_NAME,
+      publisher: clientShortName(),
       now,
     };
   }

@@ -65,6 +65,14 @@ export class EmployeeController {
     return this.service.findTeam(employeeId);
   }
 
+  // Collaborateurs du manager (entites dirigees + validateur direct) : onglet
+  // "Mes collaborateurs". Meme permission que "Membres".
+  @Get('collaborators')
+  @RequirePermission('EMPLOYE_VOIR_EQUIPE')
+  findCollaborators(@CurrentUser('employeeId') employeeId: string) {
+    return this.service.findCollaborators(employeeId);
+  }
+
   // Pas de @RequirePermission ici, volontairement — voir doc de
   // findDirectory() : accessible à tout compte authentifié.
   @Get('directory')

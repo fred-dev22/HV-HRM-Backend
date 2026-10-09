@@ -5,6 +5,10 @@ import { PrismaMssql } from '@prisma/adapter-mssql';
 import * as bcrypt from 'bcryptjs';
 import {
   ADMIN_EMAIL,
+  ADMIN_EMPLOYEE_NUMBER,
+  ADMIN_FIRST_NAME,
+  ADMIN_FULL_NAME,
+  ADMIN_LAST_NAME,
   ADMIN_PASSWORD,
   CATEGORIES,
   EXPENSE_TYPE_AUTRE,
@@ -162,10 +166,10 @@ async function main() {
     await prisma.employee.create({
       data: {
         Id: employeeId,
-        EmployeeNumber: 'HV-0001',
-        FirstName: 'Admin',
-        LastName: 'HV',
-        FullName: 'Admin HV',
+        EmployeeNumber: ADMIN_EMPLOYEE_NUMBER,
+        FirstName: ADMIN_FIRST_NAME,
+        LastName: ADMIN_LAST_NAME,
+        FullName: ADMIN_FULL_NAME,
         Gender: 'M',
         BirthDate: new Date('1990-01-01'),
         MaritalStatus: 'Single',

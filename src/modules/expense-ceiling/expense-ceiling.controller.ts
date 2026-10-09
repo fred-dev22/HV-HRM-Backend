@@ -1,3 +1,4 @@
+import { RequireModule } from '../../common/modules/require-module.decorator';
 import {
   Body,
   Controller,
@@ -13,6 +14,7 @@ import { UpdateExpenseCeilingDto } from './dto/update-expense-ceiling.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
+@RequireModule('missions_expenses')
 @Controller('expense-ceilings')
 export class ExpenseCeilingController {
   constructor(private readonly service: ExpenseCeilingService) {}

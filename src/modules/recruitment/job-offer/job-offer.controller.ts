@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import {
   Body,
   Controller,
@@ -21,6 +22,7 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 
 // RECRUTEMENT_ACCES ouvre tout le module (decision client du 05/09) : une
 // seule permission de classe, pas d'etape "approuver / refuser".
+@RequireModule('recruitment')
 @Controller('recruitment/job-offers')
 @RequirePermission('RECRUTEMENT_ACCES')
 @UseFilters(RecruitmentUploadExceptionFilter)

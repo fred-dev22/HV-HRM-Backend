@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { HiringRequestService } from './hiring-request.service';
 import { CreateHiringRequestDto } from './dto/create-hiring-request.dto';
@@ -9,6 +10,7 @@ import { CurrentPermissions } from '../../../common/decorators/current-permissio
 // ouverte a l'espace Administration (RECRUTEMENT_BESOIN_VOIR /
 // RECRUTEMENT_BESOIN_EXPRIMER) autant qu'au module (RECRUTEMENT_ACCES). Le
 // controle fin est fait dans le service via les helpers assertBesoin*.
+@RequireModule('recruitment')
 @Controller('recruitment/hiring-requests')
 export class HiringRequestController {
   constructor(private readonly service: HiringRequestService) {}

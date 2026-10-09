@@ -1,9 +1,11 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { EvalTemplateService } from './eval-template.service';
 import { CreateEvalTemplateDto, UpdateEvalTemplateDto } from './dto/eval-template.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 
+@RequireModule('recruitment')
 @Controller('recruitment/evaluation-templates')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class EvalTemplateController {

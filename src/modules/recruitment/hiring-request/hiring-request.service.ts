@@ -79,7 +79,7 @@ export class HiringRequestService {
     assertBesoinCanExpress(permissions);
     if (dto.PositionId) await this.assertPositionExists(dto.PositionId);
     const ReferenceCode = await nextReferenceCode(REFERENCE_PREFIXES.hiringRequest, (p) =>
-      this.prisma.hiringRequest.count({ where: { ReferenceCode: { startsWith: p } } }),
+      this.prisma.hiringRequest.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
     );
     const row = await this.prisma.hiringRequest.create({
       data: {

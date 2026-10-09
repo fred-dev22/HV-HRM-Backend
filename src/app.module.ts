@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -32,6 +33,8 @@ import { RecruitmentModule } from './modules/recruitment/recruitment.module';
 import { TrainingModule } from './modules/training/training.module';
 import { RemindersModule } from './modules/reminders/reminders.module';
 import { RateLimitModule } from './common/rate-limit/rate-limit.module';
+import { AppConfigModule } from './modules/app-config/app-config.module';
+import { ModuleGuard } from './common/modules/module.guard';
 
 @Module({
   imports: [
@@ -66,8 +69,14 @@ import { RateLimitModule } from './common/rate-limit/rate-limit.module';
     RecruitmentModule,
     TrainingModule,
     RemindersModule,
+    AppConfigModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // Verrou des modules optionnels (ENABLED_MODULES) : 404 sur toute route d'un
+    // module coupe, authentifie ou non. Voir common/modules/.
+    { provide: APP_GUARD, useClass: ModuleGuard },
+  ],
 })
 export class AppModule {}

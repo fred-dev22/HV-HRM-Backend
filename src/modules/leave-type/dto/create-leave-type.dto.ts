@@ -99,6 +99,13 @@ export class CreateLeaveTypeDto {
   @IsBoolean()
   CountCalendarDays?: boolean;
 
+  // Solde insuffisant : true/absent = la soumission est bloquee, false = la
+  // demande part quand meme (le validateur est averti). Voir
+  // LeaveRequestService.assertBalanceSufficient.
+  @IsOptional()
+  @IsBoolean()
+  BlockIfInsufficientBalance?: boolean;
+
   // Ne correspond à aucune colonne LeaveType — déclenche, une fois le type
   // créé, un crédit rétroactif aux employés déjà actifs (mois en cours si
   // accumulation mensuelle, année complète sinon). Voir LeaveTypeService.create.

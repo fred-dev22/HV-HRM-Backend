@@ -72,6 +72,7 @@ export class LeaveTransactionService {
         },
         select: {
           Id: true,
+          EmployeeNumber: true,
           FullName: true,
           Gender: true,
           IsExpatriate: true,
@@ -85,6 +86,8 @@ export class LeaveTransactionService {
 
     return employees.map((employee) => ({
       employeeId: employee.Id,
+      // Matricule : utilise par l'export configurable (import Sage paie).
+      employeeNumber: employee.EmployeeNumber,
       employeeName: employee.FullName,
       entityName: employee.organizationUnit?.Name ?? '',
       balances: leaveTypes

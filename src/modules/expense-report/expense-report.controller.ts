@@ -1,3 +1,4 @@
+import { RequireModule } from '../../common/modules/require-module.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { ExpenseReportService } from './expense-report.service';
 import { CreateExpenseReportDto } from './dto/create-expense-report.dto';
@@ -6,7 +7,9 @@ import { DecideExpenseReportDto } from './dto/decide-expense-report.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CurrentPermissions } from '../../common/decorators/current-permissions.decorator';
+import { assertMayCreateForOthers } from '../../common/utils/act-for-other.util';
 
+@RequireModule('missions_expenses')
 @Controller('expense-reports')
 export class ExpenseReportController {
   constructor(private readonly service: ExpenseReportService) {}
@@ -15,7 +18,9 @@ export class ExpenseReportController {
   create(
     @Body() dto: CreateExpenseReportDto,
     @CurrentUser('employeeId') employeeId: string,
+    @CurrentPermissions() permissions: Set<string>,
   ) {
+    assertMayCreateForOthers(dto.EmployeeId, employeeId, permissions, 'FRAIS_CREER_POUR_AUTRE');
     return this.service.create(dto, employeeId);
   }
 

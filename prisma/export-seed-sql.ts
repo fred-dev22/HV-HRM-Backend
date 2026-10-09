@@ -12,8 +12,14 @@
 
 import { writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
+import { DEFAULT_SEED_ADMIN_PASSWORD } from './brand-seed';
+import * as bcrypt from 'bcryptjs';
 import {
   ADMIN_EMAIL,
+  ADMIN_EMPLOYEE_NUMBER,
+  ADMIN_FIRST_NAME,
+  ADMIN_FULL_NAME,
+  ADMIN_LAST_NAME,
   ADMIN_PASSWORD,
   CATEGORIES,
   EXPENSE_TYPE_AUTRE,
@@ -21,13 +27,15 @@ import {
   ROOT_ORGANIZATION_UNIT,
 } from './seed-data';
 
-// Hash bcrypt (cout 10) de ADMIN_PASSWORD, fige ici plutot que recalcule a
-// chaque generation : bcrypt tire un sel aleatoire, un hash recalcule
-// produirait un fichier different a chaque execution alors que rien n'a
-// change. Le mot de passe en clair est de toute facon dans seed-data.ts, et
-// User.MustChangePassword vaut true par defaut — le compte est force de le
-// changer a la premiere connexion.
-const ADMIN_PASSWORD_HASH = '$2b$10$od7DMKWpzOxFLgO3SRn6nOe98iteAqCJuHP8JZWgczMcPApUfLT0a';
+// Hash bcrypt (cout 10) de ADMIN_PASSWORD. Pour le mot de passe par defaut, le
+// hash reste fige : bcrypt tire un sel aleatoire, un hash recalcule produirait
+// un fichier different a chaque generation alors que rien n'a change. Pour un
+// mot de passe propre a un client (SEED_ADMIN_PASSWORD), il est calcule a la
+// generation. Dans les deux cas User.MustChangePassword vaut true : le compte
+// est force de changer son mot de passe a la premiere connexion.
+const DEFAULT_PASSWORD_HASH = '$2b$10$od7DMKWpzOxFLgO3SRn6nOe98iteAqCJuHP8JZWgczMcPApUfLT0a';
+const ADMIN_PASSWORD_HASH =
+  ADMIN_PASSWORD === DEFAULT_SEED_ADMIN_PASSWORD ? DEFAULT_PASSWORD_HASH : bcrypt.hashSync(ADMIN_PASSWORD, 10);
 
 // Echappe une chaine pour un litteral T-SQL Unicode (N'...').
 const q = (value: string) => `N'${value.replace(/'/g, "''")}'`;
@@ -175,7 +183,7 @@ w('    [Id], [EmployeeNumber], [FirstName], [LastName], [FullName], [Gender], [B
 w('    [MaritalStatus], [IdType], [Email], [ContractType], [HireDate],');
 w('    [OrganizationUnitId], [UserId], [Status], [IsSystem], [CreatedBy]');
 w(') VALUES (');
-w(`    @adminEmployee, N'HV-0001', N'Admin', N'HV', N'Admin HV', N'M', '1990-01-01',`);
+w(`    @adminEmployee, ${q(ADMIN_EMPLOYEE_NUMBER)}, ${q(ADMIN_FIRST_NAME)}, ${q(ADMIN_LAST_NAME)}, ${q(ADMIN_FULL_NAME)}, N'M', '1990-01-01',`);
 w(`    N'Single', N'NationalId', ${q(ADMIN_EMAIL)}, N'Permanent', CAST(GETDATE() AS DATE),`);
 w("    @rootOrgUnit, @adminUser, N'Active', 1, @adminEmployee");
 w(');');

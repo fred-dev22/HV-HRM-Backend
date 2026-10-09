@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import { ContractService } from './contract.service';
 import {
@@ -15,6 +16,7 @@ import { CurrentPermissions } from '../../../common/decorators/current-permissio
 import { EmployeeConversionService } from './employee-conversion.service';
 import { ConvertContractToEmployeeDto } from './dto/convert-to-employee.dto';
 
+@RequireModule('recruitment')
 @Controller('recruitment/contract-templates')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class ContractTemplateController {
@@ -45,6 +47,7 @@ export class ContractTemplateController {
   }
 }
 
+@RequireModule('recruitment')
 @Controller('recruitment/contracts')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class ContractController {

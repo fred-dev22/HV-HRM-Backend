@@ -47,10 +47,20 @@ export class EmployeeService {
   // Reste une suggestion : le champ est pre-rempli mais modifiable, la
   // contrainte @unique + le filtre Prisma font foi en dernier recours.
   async generateEmployeeNumber(): Promise<string> {
-    const count = await this.prisma.employee.count({
+    // Plus grand numero existant + 1 (et non le nombre de lignes + 1, qui
+    // retombe sur un numero deja pris apres une suppression ou un trou). Les
+    // fiches supprimees (IsDeleted) comptent : la contrainte d'unicite les
+    // couvre aussi.
+    const rows = await this.prisma.employee.findMany({
       where: { EmployeeNumber: { startsWith: 'EMP' } },
+      select: { EmployeeNumber: true },
     });
-    return `EMP${String(count + 1).padStart(3, '0')}`;
+    let max = 0;
+    for (const row of rows) {
+      const match = /^EMP(\d+)$/.exec(row.EmployeeNumber);
+      if (match) max = Math.max(max, Number(match[1]));
+    }
+    return `EMP${String(max + 1).padStart(3, '0')}`;
   }
 
   // L'occupation d'un poste (Vacant/Occupé) n'est plus stockee — un poste a
@@ -257,6 +267,52 @@ export class EmployeeService {
         IsSystem: false,
         IsDeleted: false,
       },
+    });
+  }
+
+  // "Mon equipe" d'un manager : (1) les employes de l'entite qu'il dirige
+  // (Manager de l'entite, sans descendre dans les sous-entites), (2) ceux dont
+  // il valide les demandes : validateur direct (Employee.DirectValidatorId) ou
+  // membre du pool d'approbation de leur entite. `Links` dit pourquoi chacun
+  // figure dans la liste : 'Entite', 'Direct', 'Pool' (un ou plusieurs).
+  async findCollaborators(managerEmployeeId: string) {
+    const managed = await this.prisma.organizationUnit.findMany({
+      where: { ManagerId: managerEmployeeId, IsDeleted: false },
+      select: { Id: true },
+    });
+    const managedIds = managed.map((u) => u.Id);
+
+    // Pool d'approbation : un pool de conges ne compte que si l'entite est en
+    // mode 'Pool' (en mode validateur direct il est ignore pour les conges).
+    const pools = await this.prisma.approvalPool.findMany({
+      where: {
+        IsActive: true,
+        members: { some: { EmployeeId: managerEmployeeId } },
+        NOT: { ObjectType: 'Leave', organizationUnit: { LeaveApprovalMode: 'DirectValidator' } },
+      },
+      select: { OrganizationUnitId: true },
+    });
+    const poolIds = [...new Set(pools.map((p) => p.OrganizationUnitId))];
+
+    const rows = await this.prisma.employee.findMany({
+      where: {
+        IsSystem: false,
+        IsDeleted: false,
+        Id: { not: managerEmployeeId },
+        OR: [
+          ...(managedIds.length > 0 ? [{ OrganizationUnitId: { in: managedIds } }] : []),
+          ...(poolIds.length > 0 ? [{ OrganizationUnitId: { in: poolIds } }] : []),
+          { DirectValidatorId: managerEmployeeId },
+        ],
+      },
+      orderBy: [{ LastName: 'asc' }, { FirstName: 'asc' }],
+    });
+    return rows.map((e) => {
+      const Links: string[] = [];
+      if (managedIds.includes(e.OrganizationUnitId)) Links.push('Entite');
+      if (e.DirectValidatorId === managerEmployeeId) Links.push('Direct');
+      if (poolIds.includes(e.OrganizationUnitId)) Links.push('Pool');
+      return { ...e, Links };
     });
   }
 

@@ -1,3 +1,4 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { InterviewService } from './interview.service';
 import { ScheduleInterviewDto, UpdateInterviewDto, EvaluateInterviewDto } from './dto/interview.dto';
@@ -5,6 +6,7 @@ import { ManualRsvpDto } from './dto/interview-rsvp.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 
+@RequireModule('recruitment')
 @Controller('recruitment/interviews')
 @RequirePermission('RECRUTEMENT_ACCES')
 export class InterviewController {

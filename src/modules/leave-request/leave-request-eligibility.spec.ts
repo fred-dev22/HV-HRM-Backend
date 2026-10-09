@@ -30,9 +30,6 @@ describe('LeaveRequestService : eligibilite du type de conge', () => {
       },
       leaveRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
-        // HV calcule encore le numero de reference par comptage (voir
-        // generateReferenceCode) : le double doit exposer count().
-        count: jest.fn().mockResolvedValue(0),
         create: jest.fn().mockResolvedValue({ Id: 'req' }),
         update: jest.fn().mockResolvedValue({ Id: 'req' }),
         findUnique: jest.fn().mockResolvedValue({

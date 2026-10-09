@@ -8,6 +8,101 @@ n'y a **ni `node_modules` ni CLI Prisma** sur le serveur. `prisma db push`,
 `prisma migrate` et `prisma db seed` n'y sont donc pas exécutables — d'où les
 scripts SQL de ce dossier.
 
+## Marque, modules et organisation du code
+
+**Un seul dépôt.** L'application est la même pour tous les clients : sans
+configuration, c'est « HRM », sans logo, aux couleurs neutres, avec le seul
+socle (absences). Tout ce qui est propre à un client vit dans le dossier
+`brand/` du serveur (un `client.json` et le logo), jamais dans le code ni dans le
+`.env`, qui ne garde que l'infrastructure et les secrets. Le nom du produit
+« Productive 247 HRM » (barre du haut, à propos, emails) reste en dur.
+
+```
+brand/
+  client.json   nom, couleurs, modules, contact (aucun secret)
+  logo.png      le logo du client (facultatif)
+```
+
+```json
+{
+  "name": "HV", "short": "HV",
+  "color": "#ef463b", "accent": "#7a1f1f",
+  "background": "#fdeae8", "tint": "#fdeae8",
+  "logo": "logo.png",
+  "modules": ["recruitment", "training"]
+}
+```
+
+Le serveur relit `client.json` dès qu'il change : modifier une couleur ou un module
+ne demande **aucun redémarrage**, le frontend suit au rechargement de la page. Sans
+dossier `brand/`, c'est l'application générique.
+
+Appliquer le profil d'un client sur une instance (copie `deploy/<client>/brand/`
+vers `brand/`, ne touche ni la base, ni le code, ni le `.env`) :
+
+```bash
+npm run client:hv       # profil HV : deploy/hv/brand
+npm run client:reset    # retour à l'application générique
+```
+
+Seuls `name`, `color` et `accent` comptent vraiment ; `background` (fond des pages)
+et `tint` (en-têtes de tableau, lignes sélectionnées, champs) sont gris neutre
+tant qu'ils ne sont pas renseignés. Les autres teintes sont dérivées des deux
+couleurs principales. Modules : `missions_expenses`, `recruitment`, `training`,
+`payroll`, `reports` ; le socle est toujours actif.
+
+**Branches.**
+
+- `main` / `qa` : le produit générique. Toute amélioration utile à tous les
+  clients se fait ici.
+- `client/<nom>` : une branche par client, créée depuis `main`, qui ne porte que
+  ce qui lui est propre (demande spécifique, profil `deploy/<nom>/`).
+- Une évolution générique se fait sur `qa`/`main`, puis se **merge dans chaque
+  branche client** (`git checkout client/hv && git merge main`). Une demande
+  spécifique se fait uniquement sur la branche du client concerné.
+
+## Nouveau client : un seul script
+
+Pour préparer un nouveau client, on renseigne la marque et les modules, le script
+génère le reste :
+
+```bash
+npm run client:new -- --name "Acme Corp" --short Acme --color "#0057B8"   --logo C:\logoscme.png --modules recruitment,training   --admin-email admin@acme.com --domain rh.acme.com
+```
+
+Il génère `deploy/<client>/` : le dossier `brand/` (client.json + logo, à copier à
+côté du `.env` du serveur), `.env.generated` (secrets inclus, non versionné),
+`ADMIN-CREDENTIALS.txt`, `install.json` (choix d'installation), les scripts SQL avec
+`--with-sql`, et une `INSTALLATION.md` pré-remplie. Après installation :
+`npm run client:check -- https://rh.acme.com` vérifie la marque et les verrous de
+modules (module coupé = 404). Activer ou couper un module plus tard : modifier la
+liste `modules` de `brand/client.json`, sans redémarrer.
+
+## Nouveau client : deux scripts SQL, pas plus
+
+Un client qui s'installe pour la première fois ne reçoit **que deux scripts**, à
+exécuter dans l'ordre sur une base vide :
+
+1. `01-schema.sql` : la structure complète de la base (générée depuis `prisma/schema.prisma`) ;
+2. `02-seed.sql` : les données d'amorçage (permissions, catégories, entité racine,
+   compte administrateur, type de frais système), générées depuis `prisma/seed-data.ts`.
+
+Il n'y a jamais de script de mise à jour à lui passer. Les deux fichiers se
+régénèrent à chaque livraison (`npm run client:new -- ... --with-sql`), donc tout
+changement de schéma ou de données d'amorçage doit être fait dans
+`schema.prisma` / `seed-data.ts` : il se retrouve alors tout seul dans les deux
+scripts. Les scripts `NN-update.sql` (par exemple `v1.1.0/03-update.sql`) ne servent
+qu'aux clients **déjà installés**, pour les faire passer de leur version à la suivante.
+
+Avant chaque livraison :
+
+```bash
+npm run delivery:check
+```
+
+Il régénère les deux scripts dans un dossier temporaire et échoue si une table,
+une colonne, une permission ou une catégorie du code manque dans l'un des deux.
+
 ## Contenu
 
 ```
@@ -36,8 +131,8 @@ Ce qu'on leur envoie :
 3. Le modèle `.env.example`, qu'ils remplissent **sur le serveur** : le `.env`
    n'est pas versionné et n'est pas dans le bundle.
 
-Identifiants du compte créé par `02-seed.sql` : `admin@hv.com` /
-`Admin@2026!`, avec changement de mot de passe imposé à la première connexion.
+Identifiants du compte créé par `02-seed.sql` : ceux de `ADMIN-CREDENTIALS.txt`
+(`admin@hv.com` / `Admin@2026!` si le seed est généré sans options), avec changement de mot de passe imposé à la première connexion.
 
 ### Points sur lesquels un déploiement échoue en pratique
 

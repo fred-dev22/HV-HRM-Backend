@@ -1,9 +1,11 @@
+import { RequireModule } from '../../../common/modules/require-module.decorator';
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { EnrollmentService } from './enrollment.service';
 import { CreateEnrollmentDto, SubmitEvaluationDto } from '../dto/training.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 
+@RequireModule('training')
 @Controller('training/enrollments')
 @RequirePermission('FORMATION_ACCES')
 export class EnrollmentController {

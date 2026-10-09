@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { ApprovalPoolService } from '../approval-pool/approval-pool.service';
 import { WorkflowNotifierService, WorkflowContext } from '../notification/workflow-notifier.service';
 import { generateApprovalToken } from '../../common/approval-token';
+import { nextReferenceCode, retryOnReferenceCodeConflict } from '../../common/utils/reference-code.util';
 import { CreateExpenseReportDto } from './dto/create-expense-report.dto';
 import { UpdateExpenseReportDto } from './dto/update-expense-report.dto';
 import { DecideExpenseReportDto } from './dto/decide-expense-report.dto';
@@ -64,10 +65,12 @@ export class ExpenseReportService {
   private async generateReferenceCode(): Promise<string> {
     const year = new Date().getFullYear();
     const prefix = `NF-${year}-`;
-    const count = await this.prisma.expenseReport.count({
+    const last = await this.prisma.expenseReport.findFirst({
       where: { ReferenceCode: { startsWith: prefix } },
+      orderBy: { ReferenceCode: 'desc' },
+      select: { ReferenceCode: true },
     });
-    return `${prefix}${String(count + 1).padStart(5, '0')}`;
+    return nextReferenceCode(prefix, last?.ReferenceCode);
   }
 
   private computeTotal(lines: { Amount: unknown }[]): number {
@@ -125,33 +128,33 @@ export class ExpenseReportService {
     }
 
     const currency = dto.Currency ?? DEFAULT_CURRENCY;
-    const referenceCode = await this.generateReferenceCode();
-
-    return this.prisma.expenseReport.create({
-      data: {
-        ReferenceCode: referenceCode,
-        EmployeeId: employeeId,
-        Title: dto.Title,
-        MissionOrderId: dto.MissionOrderId,
-        Currency: currency,
-        Status: 'Draft',
-        CreatedBy: requesterEmployeeId,
-        lines: dto.Lines?.length
-          ? {
-              create: dto.Lines.map((l) => ({
-                ExpenseDate: new Date(l.ExpenseDate),
-                ExpenseTypeId: l.ExpenseTypeId,
-                Description: l.Description,
-                Amount: l.Amount,
-                Currency: l.Currency ?? currency,
-                HasDocument: l.HasDocument ?? false,
-                CreatedBy: requesterEmployeeId,
-              })),
-            }
-          : undefined,
-      },
-      include: REPORT_INCLUDE,
-    });
+    return retryOnReferenceCodeConflict(async () =>
+      this.prisma.expenseReport.create({
+        data: {
+          ReferenceCode: await this.generateReferenceCode(),
+          EmployeeId: employeeId,
+          Title: dto.Title,
+          MissionOrderId: dto.MissionOrderId,
+          Currency: currency,
+          Status: 'Draft',
+          CreatedBy: requesterEmployeeId,
+          lines: dto.Lines?.length
+            ? {
+                create: dto.Lines.map((l) => ({
+                  ExpenseDate: new Date(l.ExpenseDate),
+                  ExpenseTypeId: l.ExpenseTypeId,
+                  Description: l.Description,
+                  Amount: l.Amount,
+                  Currency: l.Currency ?? currency,
+                  HasDocument: l.HasDocument ?? false,
+                  CreatedBy: requesterEmployeeId,
+                })),
+              }
+            : undefined,
+        },
+        include: REPORT_INCLUDE,
+      }),
+    );
   }
 
   async update(id: string, dto: UpdateExpenseReportDto, requesterEmployeeId: string, canOverride: boolean) {

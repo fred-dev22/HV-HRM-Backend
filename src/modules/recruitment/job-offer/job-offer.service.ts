@@ -48,7 +48,7 @@ export class JobOfferService {
       await this.assertTemplateExists(dto.InterviewEvaluationTemplateId);
     }
     const ReferenceCode = await nextReferenceCode(REFERENCE_PREFIXES.jobOffer, (p) =>
-      this.prisma.jobOffer.count({ where: { ReferenceCode: { startsWith: p } } }),
+      this.prisma.jobOffer.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
     );
     const row = await this.prisma.jobOffer.create({
       data: {

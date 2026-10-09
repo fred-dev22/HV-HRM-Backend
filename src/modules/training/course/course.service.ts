@@ -88,7 +88,7 @@ export class CourseService {
       this.prisma.trainingCourse.create({
         data: {
           ReferenceCode: await nextReferenceCode(TRAINING_REFERENCE_PREFIXES.course, (p) =>
-            this.prisma.trainingCourse.count({ where: { ReferenceCode: { startsWith: p } } }),
+            this.prisma.trainingCourse.findMany({ where: { ReferenceCode: { startsWith: p } }, select: { ReferenceCode: true } }),
           ),
           Title: dto.title.trim(),
           Category: dto.category.trim(),
