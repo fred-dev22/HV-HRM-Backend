@@ -753,6 +753,13 @@ model LeaveType {
   // preavis minimum, lui, n'est jamais bloquant.
   BlockIfInsufficientBalance Boolean @default(true)
 
+  // Regle du week-end avale (employe local, retour client du 13/10) : true (par
+  // defaut) = un vendredi entierement absent compte aussi le week-end suivant
+  // dans le decompte. false = seuls les jours ouvres comptent, week-end jamais
+  // facture (ex. "Off recuperation"). Sans effet pour un employe expatrie (la
+  // regle ne s'applique deja pas) ni en decompte calendaire.
+  CountWeekendAfterFriday Boolean @default(true)
+
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier

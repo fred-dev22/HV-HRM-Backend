@@ -307,12 +307,31 @@ export class EmployeeService {
       },
       orderBy: [{ LastName: 'asc' }, { FirstName: 'asc' }],
     });
+    // Soldes de chacun, par type de conge actif : { idDuType: solde }. L'ecran
+    // Membres propose une colonne par type (masquee par defaut), au choix de
+    // l'utilisateur. Un type sans ligne de solde pour la personne est absent.
+    const balancesByEmployee = new Map<string, Record<string, number>>();
+    if (rows.length > 0) {
+      const balances = await this.prisma.employeeLeaveBalance.findMany({
+        where: {
+          EmployeeId: { in: rows.map((r) => r.Id) },
+          leaveType: { is: { IsActive: true } },
+        },
+        select: { EmployeeId: true, LeaveTypeId: true, Balance: true },
+      });
+      for (const bal of balances) {
+        if (!bal.LeaveTypeId) continue;
+        const mine = balancesByEmployee.get(bal.EmployeeId) ?? {};
+        mine[bal.LeaveTypeId] = Number(bal.Balance);
+        balancesByEmployee.set(bal.EmployeeId, mine);
+      }
+    }
     return rows.map((e) => {
       const Links: string[] = [];
       if (managedIds.includes(e.OrganizationUnitId)) Links.push('Entite');
       if (e.DirectValidatorId === managerEmployeeId) Links.push('Direct');
       if (poolIds.includes(e.OrganizationUnitId)) Links.push('Pool');
-      return { ...e, Links };
+      return { ...e, Links, Balances: balancesByEmployee.get(e.Id) ?? {} };
     });
   }
 

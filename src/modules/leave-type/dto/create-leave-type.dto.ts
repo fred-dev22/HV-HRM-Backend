@@ -106,6 +106,12 @@ export class CreateLeaveTypeDto {
   @IsBoolean()
   BlockIfInsufficientBalance?: boolean;
 
+  // Regle du week-end avale : true/absent = un vendredi absent compte aussi le
+  // week-end suivant (employe local) ; false = jours ouvres seulement.
+  @IsOptional()
+  @IsBoolean()
+  CountWeekendAfterFriday?: boolean;
+
   // Ne correspond à aucune colonne LeaveType — déclenche, une fois le type
   // créé, un crédit rétroactif aux employés déjà actifs (mois en cours si
   // accumulation mensuelle, année complète sinon). Voir LeaveTypeService.create.

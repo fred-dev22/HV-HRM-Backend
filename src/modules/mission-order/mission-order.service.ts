@@ -1,3 +1,4 @@
+import { assertMayCreateFor } from '../../common/utils/act-for-other.util';
 import {
   BadRequestException,
   ForbiddenException,
@@ -222,17 +223,18 @@ export class MissionOrderService {
 
   // ── CRUD ─────────────────────────────────────────────────────────────
 
-  // N'importe quel employe peut creer un ordre de mission pour n'importe
-  // quel autre employe (decision du 01/08, aucune permission requise) — le
-  // createur (CreatedBy) reste trace pour que lui et le beneficiaire (voir
-  // findMine) gardent tous les deux la visibilite et la main sur l'ordre.
-  async create(dto: CreateMissionOrderDto, requesterEmployeeId: string) {
+  // Pour soi, pour un employe de sa propre entite, ou pour n'importe qui avec la
+  // permission MISSION_CREER_POUR_AUTRE (voir assertMayCreateFor). Le createur
+  // (CreatedBy) reste trace pour que lui et le beneficiaire (voir findMine)
+  // gardent tous les deux la visibilite et la main sur l'ordre.
+  async create(dto: CreateMissionOrderDto, requesterEmployeeId: string, canCreateForOthers = false) {
     const employeeId = dto.EmployeeId ?? requesterEmployeeId;
 
     const employee = await this.prisma.employee.findUnique({ where: { Id: employeeId } });
     if (!employee) {
       throw new NotFoundException(`Employé ${employeeId} introuvable`);
     }
+    await assertMayCreateFor(this.prisma, employee, requesterEmployeeId, canCreateForOthers);
     if (!employee.EmployeeCategoryId) {
       throw new BadRequestException(
         "Cet employé n'a pas de catégorie de frais assignée : contactez le RH avant de créer un ordre de mission",

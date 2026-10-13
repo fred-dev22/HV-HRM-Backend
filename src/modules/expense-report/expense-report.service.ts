@@ -1,3 +1,4 @@
+import { assertMayCreateFor } from '../../common/utils/act-for-other.util';
 import {
   BadRequestException,
   ForbiddenException,
@@ -116,16 +117,17 @@ export class ExpenseReportService {
 
   // ── CRUD ─────────────────────────────────────────────────────────────
 
-  // N'importe quel employe peut creer une note de frais pour n'importe quel
-  // autre employe (decision du 01/08, aucune permission requise) — le
+  // Pour soi, pour un employe de sa propre entite, ou pour n'importe qui avec la
+  // permission FRAIS_CREER_POUR_AUTRE (voir assertMayCreateFor) — le
   // createur (CreatedBy) reste trace pour que lui et le beneficiaire (voir
   // findMine) gardent tous les deux la visibilite et la main sur la note.
-  async create(dto: CreateExpenseReportDto, requesterEmployeeId: string) {
+  async create(dto: CreateExpenseReportDto, requesterEmployeeId: string, canCreateForOthers = false) {
     const employeeId = dto.EmployeeId ?? requesterEmployeeId;
     const employee = await this.prisma.employee.findUnique({ where: { Id: employeeId } });
     if (!employee) {
       throw new NotFoundException(`Employé ${employeeId} introuvable`);
     }
+    await assertMayCreateFor(this.prisma, employee, requesterEmployeeId, canCreateForOthers);
 
     const currency = dto.Currency ?? DEFAULT_CURRENCY;
     return retryOnReferenceCodeConflict(async () =>

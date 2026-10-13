@@ -6,6 +6,8 @@
 --     (colonne LeaveType.BlockIfInsufficientBalance). Vrai par defaut pour tous
 --     les types ; la decocher sur un type (ecran Types & Regles de conges) lui
 --     rend l'ancien comportement (la demande part, le validateur est averti).
+--     Et l'option "Week-end avale apres un vendredi" (LeaveType.CountWeekendAfterFriday,
+--     vraie par defaut : comportement actuel inchange ; a decocher pour "Off recuperation").
 --  2) Donnees : permissions "creer une demande pour un autre employe" (conge,
 --     mission, note de frais), reservees par defaut aux categories Admin RH et
 --     Directeur RH et a leurs comptes existants.
@@ -20,6 +22,11 @@ BEGIN TRAN;
 IF COL_LENGTH('dbo.LeaveType', 'BlockIfInsufficientBalance') IS NULL
 BEGIN
     ALTER TABLE [dbo].[LeaveType] ADD [BlockIfInsufficientBalance] BIT NOT NULL CONSTRAINT [LeaveType_BlockIfInsufficientBalance_df] DEFAULT 1;
+END;
+
+IF COL_LENGTH('dbo.LeaveType', 'CountWeekendAfterFriday') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[LeaveType] ADD [CountWeekendAfterFriday] BIT NOT NULL CONSTRAINT [LeaveType_CountWeekendAfterFriday_df] DEFAULT 1;
 END;
 
 -- 2a) Catalogue des permissions

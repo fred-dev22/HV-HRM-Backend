@@ -1,24 +1,38 @@
 import { ForbiddenException } from '@nestjs/common';
-import { assertMayCreateForOthers } from './act-for-other.util';
+import { assertMayCreateFor } from './act-for-other.util';
 
-describe('assertMayCreateForOthers', () => {
-  const none = new Set<string>();
-  const withCode = new Set(['CONGE_CREER_POUR_AUTRE']);
+describe('assertMayCreateFor', () => {
+  const prismaWith = (requesterEntity: string | null) => ({
+    employee: { findUnique: jest.fn().mockResolvedValue(requesterEntity === undefined ? null : { OrganizationUnitId: requesterEntity }) },
+  });
+  const target = (entity: string | null) => ({ Id: 'cible', OrganizationUnitId: entity });
 
-  it('pour soi-meme (omis ou explicite) : toujours permis', () => {
-    expect(() => assertMayCreateForOthers(undefined, 'me', none, 'CONGE_CREER_POUR_AUTRE')).not.toThrow();
-    expect(() => assertMayCreateForOthers('me', 'me', none, 'CONGE_CREER_POUR_AUTRE')).not.toThrow();
+  it('pour soi-meme : toujours permis, sans requete', async () => {
+    const prisma = prismaWith('A');
+    await expect(assertMayCreateFor(prisma, { Id: 'moi', OrganizationUnitId: 'A' }, 'moi', false)).resolves.toBeUndefined();
+    expect(prisma.employee.findUnique).not.toHaveBeenCalled();
   });
 
-  it('pour un autre sans la permission : refuse', () => {
-    expect(() => assertMayCreateForOthers('other', 'me', none, 'CONGE_CREER_POUR_AUTRE')).toThrow(ForbiddenException);
+  it('avec la permission : permis pour une autre entite, sans requete', async () => {
+    const prisma = prismaWith('A');
+    await expect(assertMayCreateFor(prisma, target('B'), 'moi', true)).resolves.toBeUndefined();
+    expect(prisma.employee.findUnique).not.toHaveBeenCalled();
   });
 
-  it('une autre permission ne suffit pas', () => {
-    expect(() => assertMayCreateForOthers('other', 'me', new Set(['CONGE_VOIR_TOUT']), 'CONGE_CREER_POUR_AUTRE')).toThrow(ForbiddenException);
+  it('sans permission : permis pour un employe de la meme entite', async () => {
+    await expect(assertMayCreateFor(prismaWith('A'), target('A'), 'moi', false)).resolves.toBeUndefined();
   });
 
-  it('pour un autre avec la permission : permis', () => {
-    expect(() => assertMayCreateForOthers('other', 'me', withCode, 'CONGE_CREER_POUR_AUTRE')).not.toThrow();
+  it('sans permission : refuse pour une autre entite', async () => {
+    await expect(assertMayCreateFor(prismaWith('A'), target('B'), 'moi', false)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('sans permission : refuse quand le demandeur n\'a pas d\'entite', async () => {
+    await expect(assertMayCreateFor(prismaWith(null), target(null), 'moi', false)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('sans permission : refuse quand le demandeur est introuvable', async () => {
+    const prisma = { employee: { findUnique: jest.fn().mockResolvedValue(null) } };
+    await expect(assertMayCreateFor(prisma, target('A'), 'moi', false)).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

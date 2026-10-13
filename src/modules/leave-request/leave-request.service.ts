@@ -1,3 +1,4 @@
+import { assertMayCreateFor } from '../../common/utils/act-for-other.util';
 import {
   BadRequestException,
   ForbiddenException,
@@ -515,12 +516,16 @@ export class LeaveRequestService {
 
   // ── CRUD ─────────────────────────────────────────────────────────────
 
-  // N'importe quel employe peut soumettre une demande pour n'importe quel
-  // autre employe (decision du 01/08, aucune permission requise) — le
+  // Pour soi, pour un employe de sa propre entite, ou pour n'importe qui avec la
+  // permission CONGE_CREER_POUR_AUTRE (voir assertMayCreateFor) — le
   // createur (CreatedBy) reste trace pour que lui et le beneficiaire (voir
   // findMine) gardent tous les deux la visibilite et la main sur la
   // demande (voir update/remove/submit/cancel ci-dessous).
-  async create(dto: CreateLeaveRequestDto, requesterEmployeeId: string) {
+  async create(
+    dto: CreateLeaveRequestDto,
+    requesterEmployeeId: string,
+    canCreateForOthers = false,
+  ) {
     const employeeId = dto.EmployeeId ?? requesterEmployeeId;
 
     const employee = await this.prisma.employee.findUnique({
@@ -529,6 +534,7 @@ export class LeaveRequestService {
     if (!employee) {
       throw new NotFoundException(`Employé ${employeeId} introuvable`);
     }
+    await assertMayCreateFor(this.prisma, employee, requesterEmployeeId, canCreateForOthers);
     // Retour client du 09/09 : un employe sans entite rattachee ne peut pas
     // creer de demande de conge du tout (ni pool ni validateur direct ne
     // peuvent alors etre resolus, voir routeToApproval). OrganizationUnitId
@@ -560,7 +566,8 @@ export class LeaveRequestService {
       endDate,
       employee.OrganizationUnitId,
       employee.EmployeeCategoryId,
-      employee.IsExpatriate,
+      // Type sans regle du week-end avale : meme calcul que pour un expatrie.
+      employee.IsExpatriate || leaveType.CountWeekendAfterFriday === false,
       startPeriod,
       endPeriod,
       leaveType.CountCalendarDays,
@@ -653,7 +660,7 @@ export class LeaveRequestService {
         endDate,
         employee.OrganizationUnitId,
         employee.EmployeeCategoryId,
-        employee.IsExpatriate,
+        employee.IsExpatriate || leaveType.CountWeekendAfterFriday === false,
         startPeriod,
         endPeriod,
         leaveType.CountCalendarDays,
