@@ -55,6 +55,18 @@ describe('LeaveTransactionService.generateAccruals : eligibilite', () => {
     expect(credited()).toEqual(['f1:allaitement']);
   });
 
+  it('un type a credit manuel (AutoAccrual = false) ne recoit jamais de credit automatique', async () => {
+    const { service, credited } = build(
+      [homme, femme],
+      [
+        type({ Id: 'maternite', DaysPerYear: 98, AppliesToGender: 'F', AutoAccrual: false }),
+        type({ Id: 'annuel', DaysPerYear: 30, AutoAccrual: true }),
+      ],
+    );
+    await service.generateAccruals('admin');
+    expect(credited()).toEqual(['h1:annuel', 'f1:annuel']);
+  });
+
   it('un type sans ciblage est credite a tout le monde', async () => {
     const { service, credited } = build([homme, femme], [type({ Id: 'annuel', DaysPerYear: 30 })]);
     await service.generateAccruals('admin');

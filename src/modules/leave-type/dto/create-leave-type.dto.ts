@@ -112,6 +112,12 @@ export class CreateLeaveTypeDto {
   @IsBoolean()
   CountWeekendAfterFriday?: boolean;
 
+  // Generation automatique des soldes : false = le systeme ne credite jamais ce
+  // type (la RH l'alimente a la main). Defaut : true.
+  @IsOptional()
+  @IsBoolean()
+  AutoAccrual?: boolean;
+
   // Ne correspond à aucune colonne LeaveType — déclenche, une fois le type
   // créé, un crédit rétroactif aux employés déjà actifs (mois en cours si
   // accumulation mensuelle, année complète sinon). Voir LeaveTypeService.create.

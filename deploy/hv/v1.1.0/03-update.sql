@@ -8,6 +8,8 @@
 --     rend l'ancien comportement (la demande part, le validateur est averti).
 --     Et l'option "Week-end avale apres un vendredi" (LeaveType.CountWeekendAfterFriday,
 --     vraie par defaut : comportement actuel inchange ; a decocher pour "Off recuperation").
+--     Et l'option "Generation automatique des soldes" (LeaveType.AutoAccrual, vraie par
+--     defaut) : decochee, le systeme ne credite jamais ce type, la RH l'alimente a la main.
 --  2) Donnees : permissions "creer une demande pour un autre employe" (conge,
 --     mission, note de frais), reservees par defaut aux categories Admin RH et
 --     Directeur RH et a leurs comptes existants.
@@ -27,6 +29,11 @@ END;
 IF COL_LENGTH('dbo.LeaveType', 'CountWeekendAfterFriday') IS NULL
 BEGIN
     ALTER TABLE [dbo].[LeaveType] ADD [CountWeekendAfterFriday] BIT NOT NULL CONSTRAINT [LeaveType_CountWeekendAfterFriday_df] DEFAULT 1;
+END;
+
+IF COL_LENGTH('dbo.LeaveType', 'AutoAccrual') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[LeaveType] ADD [AutoAccrual] BIT NOT NULL CONSTRAINT [LeaveType_AutoAccrual_df] DEFAULT 1;
 END;
 
 -- 2a) Catalogue des permissions

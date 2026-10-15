@@ -760,6 +760,14 @@ model LeaveType {
   // regle ne s'applique deja pas) ni en decompte calendaire.
   CountWeekendAfterFriday Boolean @default(true)
 
+  // Generation automatique des soldes (retour client du 14/10, conges maternite /
+  // paternite) : true (par defaut) = le systeme credite ce type tout seul
+  // (generation planifiee annuelle/mensuelle, nouvel employe, creation du type).
+  // false = jamais de credit automatique, le solde reste a 0 jusqu'a ce que la RH
+  // le credite (Ajuster un solde), tout en restant plafonne par ce solde
+  // (different d'un type illimite, DaysPerYear 0).
+  AutoAccrual Boolean @default(true)
+
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier

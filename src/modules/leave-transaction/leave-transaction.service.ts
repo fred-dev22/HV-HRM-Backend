@@ -250,6 +250,9 @@ export class LeaveTransactionService {
     for (const leaveType of leaveTypes) {
       const daysPerYear = Number(leaveType.DaysPerYear);
       if (daysPerYear <= 0) continue;
+      // Type a credit manuel (maternite / paternite) : la RH alimente le solde
+      // elle-meme quand le dossier est depose.
+      if (leaveType.AutoAccrual === false) continue;
 
       // Seuls les employes concernes par le ciblage du type (genre,
       // expatrie, entite) sont credites. Sans ce filtre, un type reserve a un
