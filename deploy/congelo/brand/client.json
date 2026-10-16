@@ -2,13 +2,13 @@
   "name": "Congélo",
   "short": "Congélo",
   "productName": "Congélo",
+  "theme": "congelo",
   "color": "#006b3c",
   "accent": "#c8102e",
   "background": "#f2f6f4",
   "tint": "#e6f4ed",
   "logo": "logo.png",
+  "loginLogo": "login-logo.webp",
   "favicon": "favicon.png",
-  "modules": [
-    "missions_expenses"
-  ]
+  "modules": []
 }

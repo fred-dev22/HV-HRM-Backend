@@ -1,7 +1,7 @@
 import { mkdtempSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { DEFAULT_ACCENT_COLOR, DEFAULT_BRAND_NAME, DEFAULT_PRIMARY_COLOR, getBrandFavicon, getBrandLogo, loadBrand, tint } from './brand';
+import { DEFAULT_ACCENT_COLOR, DEFAULT_BRAND_NAME, DEFAULT_PRIMARY_COLOR, getBrandFavicon, getBrandLoginLogo, getBrandLogo, loadBrand, tint } from './brand';
 import { readClientFile, setBrandDirForTests } from './client-file';
 import { renderEmailHtml } from '../modules/mail/email-templates';
 
@@ -23,6 +23,7 @@ describe("marque de l'instance (brand/client.json)", () => {
       name: DEFAULT_BRAND_NAME,
       shortName: DEFAULT_BRAND_NAME,
       productName: null,
+      theme: null,
       primaryColor: DEFAULT_PRIMARY_COLOR,
       accentColor: DEFAULT_ACCENT_COLOR,
       backgroundColor: null,
@@ -47,6 +48,7 @@ describe("marque de l'instance (brand/client.json)", () => {
       name: 'Acme Corp',
       shortName: 'Acme',
       productName: null,
+      theme: null,
       primaryColor: '#0057b8',
       accentColor: '#7a1f1f',
       backgroundColor: '#fdeae8',
@@ -123,6 +125,21 @@ describe('logo de la marque', () => {
 
   it('fichier introuvable : aucun logo, sans planter', () => {
     expect(getBrandLogo({ logo: 'inexistant.png' }, brandDir({}))).toBeNull();
+  });
+});
+
+describe('theme et logo de connexion', () => {
+  it('theme : nom de theme valide, sinon ignore', () => {
+    expect(loadBrand({ theme: ' Congelo ' }).theme).toBe('congelo');
+    expect(loadBrand({ theme: 'x y; <b>' }).theme).toBeNull();
+    expect(loadBrand({}).theme).toBeNull();
+  });
+
+  it('loginLogo : fichier distinct du logo, absent = null', () => {
+    expect(getBrandLoginLogo({})).toBeNull();
+    const dir = brandDir({ loginLogo: 'login-logo.png' }, false);
+    writeFileSync(join(dir, 'login-logo.png'), PNG);
+    expect(getBrandLoginLogo({ loginLogo: 'login-logo.png' }, dir)).not.toBeNull();
   });
 });
 

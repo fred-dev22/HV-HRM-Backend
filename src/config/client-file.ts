@@ -17,6 +17,10 @@ import { Logger } from '@nestjs/common';
 //     "background": "#fdeae8",           fond des pages (optionnel)
 //     "tint": "#fdeae8",                 surfaces claires : tableaux, selections (optionnel)
 //     "logo": "logo.png",                fichier du logo, dans ce dossier (optionnel)
+//     "loginLogo": "login-logo.webp",    logo des pages d'acces (connexion...), souvent avec le nom de la marque
+//                                        (optionnel ; absent = le logo)
+//     "theme": "congelo",                theme de couleurs predefini du frontend (optionnel ; absent = couleurs
+//                                        derivees de color / accent / background / tint)
 //     "favicon": "favicon.png",          icone de l'onglet du navigateur : image CARREE, 180x180 ou plus
 //                                        (optionnel ; absent = le logo, a eviter s'il est tout en largeur)
 //     "supportEmail": "rh@hv.com",       contact affiche (optionnel)
@@ -38,6 +42,8 @@ export interface ClientFile {
   tint?: string;
   logo?: string;
   favicon?: string;
+  loginLogo?: string;
+  theme?: string;
   supportEmail?: string;
   modules?: string[];
   jobDistributionUi?: boolean;

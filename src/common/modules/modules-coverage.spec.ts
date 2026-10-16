@@ -20,6 +20,7 @@ const OWNERS: Record<string, ModuleKey> = {
   'expense-ceiling': 'missions_expenses',
   recruitment: 'recruitment',
   training: 'training',
+  reminders: 'deadlines',
 };
 
 function controllerFiles(dir: string): string[] {

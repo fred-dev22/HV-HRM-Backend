@@ -12,6 +12,8 @@ export interface Brand {
   shortName: string;
   // Texte du bandeau du haut ; null = le nom du produit, fourni par le frontend.
   productName: string | null;
+  // Theme de couleurs predefini du frontend (ex: "congelo") ; null = derive des couleurs ci-dessus.
+  theme: string | null;
   primaryColor: string;
   accentColor: string;
   // Fond des pages d'acces et de l'application ; null = gris neutre livre.
@@ -43,6 +45,17 @@ function clean(value: unknown): string | null {
   return v ? v : null;
 }
 
+// Nom d'un theme predefini : lettres minuscules, chiffres et tirets seulement (il est
+// recopie tel quel dans l'attribut data-theme de la page).
+function themeName(value: unknown): string | null {
+  const v = clean(value)?.toLowerCase() ?? null;
+  if (v && !/^[a-z0-9-]{1,30}$/.test(v)) {
+    logger.warn(`brand/client.json : theme="${v}" ignore (lettres minuscules, chiffres et tirets)`);
+    return null;
+  }
+  return v;
+}
+
 function color(file: ClientFile, key: 'color' | 'accent' | 'background' | 'tint'): string | null {
   const v = clean(file[key]);
   if (!v) return null;
@@ -59,6 +72,7 @@ export function loadBrand(file: ClientFile = readClientFile()): Brand {
     name,
     shortName: clean(file.short) ?? name,
     productName: clean(file.productName),
+    theme: themeName(file.theme),
     primaryColor: color(file, 'color') ?? DEFAULT_PRIMARY_COLOR,
     accentColor: color(file, 'accent') ?? DEFAULT_ACCENT_COLOR,
     backgroundColor: color(file, 'background'),
@@ -90,7 +104,7 @@ const imageCache = new Map<string, { key: string; image: BrandLogo }>();
 // Charge une image de la marque (logo ou favicon) : fichier nomme dans
 // brand/client.json, range dans le meme dossier. Renvoie null s'il n'est pas
 // configure ou introuvable (sans planter).
-function loadBrandImage(kind: 'logo' | 'favicon', configuredName: unknown, dir: string): BrandLogo | null {
+function loadBrandImage(kind: 'logo' | 'favicon' | 'loginLogo', configuredName: unknown, dir: string): BrandLogo | null {
   const configured = clean(configuredName);
   if (!configured) return null;
   const path = isAbsolute(configured) ? configured : join(dir, configured);
@@ -119,6 +133,13 @@ function loadBrandImage(kind: 'logo' | 'favicon', configuredName: unknown, dir: 
 // l'interface, ni dans les emails) : la fonction renvoie null.
 export function getBrandLogo(file: ClientFile = readClientFile(), dir: string = brandDir()): BrandLogo | null {
   return loadBrandImage('logo', file.logo, dir);
+}
+
+// Logo des pages d'acces (connexion, mot de passe oublie...) : peut porter le nom de
+// la marque, la ou le logo de l'interface est un simple pictogramme. Null si non
+// configure : le frontend retombe alors sur le logo.
+export function getBrandLoginLogo(file: ClientFile = readClientFile(), dir: string = brandDir()): BrandLogo | null {
+  return loadBrandImage('loginLogo', file.loginLogo, dir);
 }
 
 // Icone de l'onglet du navigateur : fichier nomme par "favicon" dans brand/client.json.

@@ -9,6 +9,7 @@
 // sortie est 0 si tout est conforme, 1 sinon (utilisable en recette).
 
 const MODULE_ROUTES = {
+  deadlines: ['/api/reminders/upcoming'],
   missions_expenses: ['/api/mission-orders', '/api/expense-reports', '/api/expense-configs', '/api/expense-types', '/api/expense-ceilings'],
   recruitment: [
     '/api/recruitment/applications',

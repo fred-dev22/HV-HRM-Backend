@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Query } from '@nestjs/common';
+import { RequireModule } from '../../common/modules/require-module.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CurrentPermissions } from '../../common/decorators/current-permissions.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -10,6 +11,7 @@ import { RemindersRangeDto } from './dto/reminders-range.dto';
 // classe : la route /upcoming accepte EMPLOYE_VOIR_TOUT (vue entreprise) OU
 // EMPLOYE_VOIR_EQUIPE (vue equipe), controle fin dans le service (meme schema
 // que HiringRequestController).
+@RequireModule('deadlines')
 @Controller('reminders')
 export class RemindersController {
   constructor(

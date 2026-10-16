@@ -8,12 +8,14 @@ import { ClientFile, readClientFile } from '../../config/client-file';
 //   missions_expenses  Ordres de mission, notes de frais et leur configuration
 //   recruitment        Recrutement (besoins, offres, candidatures, contrats...)
 //   training           Formation (catalogue, sessions, evaluations, budget...)
+//   deadlines          Rappels d'echeances (ecran RH, carte du tableau de bord, notifications quotidiennes)
 //   payroll            Paie (module en construction : ecrans d'attente)
 //   reports            Rapports (module en construction : ecrans d'attente)
 export const SWITCHABLE_MODULES = [
   'missions_expenses',
   'recruitment',
   'training',
+  'deadlines',
   'payroll',
   'reports',
 ] as const;

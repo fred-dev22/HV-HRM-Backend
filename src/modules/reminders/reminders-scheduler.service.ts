@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { isModuleEnabled } from '../../common/modules/modules.config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -43,6 +44,8 @@ export class RemindersSchedulerService {
 
   @Cron(CronExpression.EVERY_DAY_AT_6AM)
   async handleDaily(): Promise<void> {
+    // Module coupe pour ce client : aucune notification de rappel.
+    if (!isModuleEnabled('deadlines')) return;
     await this.runOnce();
   }
 

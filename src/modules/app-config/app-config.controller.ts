@@ -2,7 +2,7 @@ import { Controller, Get, Header, NotFoundException, Res } from '@nestjs/common'
 import { createHash } from 'crypto';
 import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
-import { getBrand, getBrandFavicon, getBrandLogo } from '../../config/brand';
+import { getBrand, getBrandFavicon, getBrandLoginLogo, getBrandLogo } from '../../config/brand';
 import { getEnabledModules } from '../../common/modules/modules.config';
 import { readClientFile } from '../../config/client-file';
 
@@ -19,6 +19,7 @@ export class AppConfigController {
     const brand = getBrand();
     const logo = getBrandLogo();
     const favicon = getBrandFavicon();
+    const loginLogo = getBrandLoginLogo();
     return {
       brand: {
         ...brand,
@@ -26,6 +27,8 @@ export class AppConfigController {
         hasLogo: logo !== null,
         logoVersion: logo ? createHash('sha1').update(logo.buffer).digest('hex').slice(0, 10) : null,
         // Icone d'onglet dediee (sinon le frontend utilise le logo).
+        hasLoginLogo: loginLogo !== null,
+        loginLogoVersion: loginLogo ? createHash('sha1').update(loginLogo.buffer).digest('hex').slice(0, 10) : null,
         hasFavicon: favicon !== null,
         faviconVersion: favicon ? createHash('sha1').update(favicon.buffer).digest('hex').slice(0, 10) : null,
       },
@@ -34,6 +37,16 @@ export class AppConfigController {
         jobDistributionUi: readClientFile().jobDistributionUi === true,
       },
     };
+  }
+
+  @Public()
+  @Get('login-logo')
+  loginLogo(@Res() res: Response) {
+    const logo = getBrandLoginLogo();
+    if (!logo) throw new NotFoundException('Aucun logo de connexion configure');
+    res.setHeader('Content-Type', logo.mime);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(logo.buffer);
   }
 
   @Public()

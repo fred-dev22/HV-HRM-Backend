@@ -48,7 +48,7 @@ npm run client:reset    # retour à l'application générique
 Seuls `name`, `color` et `accent` comptent vraiment ; `background` (fond des pages)
 et `tint` (en-têtes de tableau, lignes sélectionnées, champs) sont gris neutre
 tant qu'ils ne sont pas renseignés. Les autres teintes sont dérivées des deux
-couleurs principales. Modules : `missions_expenses`, `recruitment`, `training`,
+couleurs principales. Modules : `missions_expenses`, `recruitment`, `training`, `deadlines` (rappels d'échéances),
 `payroll`, `reports` ; le socle est toujours actif.
 
 **Branches.**

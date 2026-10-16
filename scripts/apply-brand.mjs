@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TARGET = join(ROOT, 'brand');
-const MODULES = ['missions_expenses', 'recruitment', 'training', 'payroll', 'reports'];
+const MODULES = ['missions_expenses', 'recruitment', 'training', 'deadlines', 'payroll', 'reports'];
 
 const argv = process.argv.slice(2);
 const opt = (name) => {
@@ -45,7 +45,7 @@ function clearTarget() {
   if (existsSync(file)) {
     try {
       const old = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
-      for (const key of ['logo', 'favicon']) {
+      for (const key of ['logo', 'favicon', 'loginLogo']) {
         if (old[key] && existsSync(join(TARGET, old[key]))) rmSync(join(TARGET, old[key]));
       }
     } catch {
@@ -86,6 +86,8 @@ const unknown = modules.filter((m) => !MODULES.includes(m));
 if (unknown.length) errors.push(`modules inconnus : ${unknown.join(', ')} (valeurs : ${MODULES.join(', ')})`);
 if (p.logo && !existsSync(join(source, p.logo))) errors.push(`logo introuvable : ${join(source, p.logo)}`);
 if (p.favicon && !existsSync(join(source, p.favicon))) errors.push(`favicon introuvable : ${join(source, p.favicon)}`);
+if (p.loginLogo && !existsSync(join(source, p.loginLogo))) errors.push(`loginLogo introuvable : ${join(source, p.loginLogo)}`);
+if (p.theme && !/^[a-z0-9-]{1,30}$/.test(p.theme)) errors.push('"theme" : lettres minuscules, chiffres et tirets seulement');
 if (errors.length) fail(`profil invalide :\n  - ${errors.join('\n  - ')}`);
 
 clearTarget();

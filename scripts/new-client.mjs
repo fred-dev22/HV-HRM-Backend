@@ -31,7 +31,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const MODULES = ['missions_expenses', 'recruitment', 'training', 'payroll', 'reports'];
+const MODULES = ['missions_expenses', 'recruitment', 'training', 'deadlines', 'payroll', 'reports'];
 const LOGO_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.svg'];
 
 const HELP = `Usage : node scripts/new-client.mjs [options]
@@ -45,6 +45,7 @@ Marque
   --background <#RRGGBB>    Fond des pages, tres clair (optionnel, defaut : gris neutre)
   --tint <#RRGGBB>          Surfaces claires : en-tetes de tableau, selections (optionnel)
   --logo <fichier>          Logo PNG/JPG/WEBP/SVG (PNG conseille : repris dans les emails)
+  --login-logo <fichier>    Logo des pages de connexion (avec le nom de la marque) ; absent = le logo
   --favicon <fichier>       Icone de l'onglet du navigateur : image CARREE, 180x180 ou plus
                             (optionnelle ; absente = le logo, a eviter s'il est tout en largeur)
   --support-email <adresse> Contact affiche aux utilisateurs
@@ -169,6 +170,12 @@ function buildConfig(raw, base) {
     if (!existsSync(logoPath)) errors.push(`logo introuvable : ${logoPath}`);
     else if (!LOGO_EXTENSIONS.includes(extname(logoPath).toLowerCase())) errors.push(`logo : format non supporte (${LOGO_EXTENSIONS.join(', ')})`);
     c.logoPath = logoPath;
+  }
+  if (c.loginLogo) {
+    const loginLogoPath = resolve(base, c.loginLogo);
+    if (!existsSync(loginLogoPath)) errors.push(`logo de connexion introuvable : ${loginLogoPath}`);
+    else if (!LOGO_EXTENSIONS.includes(extname(loginLogoPath).toLowerCase())) errors.push(`logo de connexion : format non supporte (${LOGO_EXTENSIONS.join(', ')})`);
+    c.loginLogoPath = loginLogoPath;
   }
   if (c.favicon) {
     const faviconPath = resolve(base, c.favicon);
@@ -327,7 +334,7 @@ function main() {
   for (const [key, value] of Object.entries(args)) {
     if (['config', 'force', 'with-sql', 'overwrite-sql', 'dry-run', 'help'].includes(key)) continue;
     raw[camel(key)] = value;
-    if (key === 'logo' || key === 'favicon') base = process.cwd();
+    if (key === 'logo' || key === 'favicon' || key === 'login-logo') base = process.cwd();
   }
 
   const { config: c, errors } = buildConfig(raw, base);
@@ -357,6 +364,12 @@ function main() {
     if (resolve(c.logoPath) !== resolve(target)) copyFileSync(c.logoPath, target);
   }
 
+  let loginLogoFile = null;
+  if (c.loginLogoPath) {
+    loginLogoFile = `login-logo${extname(c.loginLogoPath).toLowerCase()}`;
+    const target = join(dir, 'brand', loginLogoFile);
+    if (resolve(c.loginLogoPath) !== resolve(target)) copyFileSync(c.loginLogoPath, target);
+  }
   let faviconFile = null;
   if (c.faviconPath) {
     faviconFile = `favicon${extname(c.faviconPath).toLowerCase()}`;
@@ -374,6 +387,7 @@ function main() {
     background: c.background,
     tint: c.tint,
     logo: logoFile ?? undefined,
+    loginLogo: loginLogoFile ?? undefined,
     favicon: faviconFile ?? undefined,
     supportEmail: c.supportEmail,
     modules: c.modules,
