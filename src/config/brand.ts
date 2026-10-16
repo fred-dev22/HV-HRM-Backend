@@ -10,6 +10,8 @@ import { brandDir, ClientFile, readClientFile } from './client-file';
 export interface Brand {
   name: string;
   shortName: string;
+  // Texte du bandeau du haut ; null = le nom du produit, fourni par le frontend.
+  productName: string | null;
   primaryColor: string;
   accentColor: string;
   // Fond des pages d'acces et de l'application ; null = gris neutre livre.
@@ -56,6 +58,7 @@ export function loadBrand(file: ClientFile = readClientFile()): Brand {
   return {
     name,
     shortName: clean(file.short) ?? name,
+    productName: clean(file.productName),
     primaryColor: color(file, 'color') ?? DEFAULT_PRIMARY_COLOR,
     accentColor: color(file, 'accent') ?? DEFAULT_ACCENT_COLOR,
     backgroundColor: color(file, 'background'),

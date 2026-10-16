@@ -22,6 +22,7 @@ describe("marque de l'instance (brand/client.json)", () => {
     expect(b).toEqual({
       name: DEFAULT_BRAND_NAME,
       shortName: DEFAULT_BRAND_NAME,
+      productName: null,
       primaryColor: DEFAULT_PRIMARY_COLOR,
       accentColor: DEFAULT_ACCENT_COLOR,
       backgroundColor: null,
@@ -45,12 +46,18 @@ describe("marque de l'instance (brand/client.json)", () => {
     expect(b).toEqual({
       name: 'Acme Corp',
       shortName: 'Acme',
+      productName: null,
       primaryColor: '#0057b8',
       accentColor: '#7a1f1f',
       backgroundColor: '#fdeae8',
       tintColor: '#fdeae8',
       supportEmail: 'rh@acme.test',
     });
+  });
+
+  it('productName : texte du bandeau, absent = nom du produit', () => {
+    expect(loadBrand({ name: 'Acme', productName: ' Acme RH ' }).productName).toBe('Acme RH');
+    expect(loadBrand({ name: 'Acme' }).productName).toBeNull();
   });
 
   it("le nom court suit le nom quand il n'est pas donne", () => {

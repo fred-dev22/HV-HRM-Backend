@@ -6,6 +6,7 @@
 // prochain chargement de page.
 //
 //   npm run client:hv        applique le profil HV (deploy/hv/brand)
+//   npm run client:congelo   applique le profil Congelo (deploy/congelo/brand)
 //   npm run client:reset     retour a l'application generique : "HRM", sans logo,
 //                            couleurs neutres, aucun module optionnel
 //   node scripts/apply-brand.mjs --preset deploy/acme/brand

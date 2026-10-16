@@ -10,6 +10,8 @@ import { Logger } from '@nestjs/common';
 //   {
 //     "name": "HV",                      nom du client
 //     "short": "HV",                     forme courte (defaut : name)
+//     "productName": "Congélo",          texte du bandeau noir en haut de l'application
+//                                        (defaut : "Productive 247 HRM", le nom du produit)
 //     "color": "#ef463b",                couleur principale
 //     "accent": "#7a1f1f",               couleur d'accent / alerte
 //     "background": "#fdeae8",           fond des pages (optionnel)
@@ -27,6 +29,7 @@ import { Logger } from '@nestjs/common';
 export interface ClientFile {
   name?: string;
   short?: string;
+  productName?: string;
   color?: string;
   accent?: string;
   background?: string;

@@ -1,0 +1,13 @@
+{
+  "name": "Congélo",
+  "short": "Congélo",
+  "productName": "Congélo",
+  "color": "#006b3c",
+  "accent": "#c8102e",
+  "background": "#f2f6f4",
+  "tint": "#e6f4ed",
+  "logo": "logo.png",
+  "modules": [
+    "missions_expenses"
+  ]
+}
