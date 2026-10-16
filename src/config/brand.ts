@@ -85,32 +85,48 @@ function pngSize(buf: Buffer): { width: number; height: number } | null {
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
 }
 
-let cache: { key: string; logo: BrandLogo } | null = null;
+const imageCache = new Map<string, { key: string; image: BrandLogo }>();
 
-// Logo du client : fichier nomme par "logo" dans brand/client.json, range dans le
-// meme dossier. Sans logo configure, l'application n'en affiche aucun (ni dans
-// l'interface, ni dans les emails, ni comme favicon) : la fonction renvoie null.
-export function getBrandLogo(file: ClientFile = readClientFile(), dir: string = brandDir()): BrandLogo | null {
-  const configured = clean(file.logo);
+// Charge une image de la marque (logo ou favicon) : fichier nomme dans
+// brand/client.json, range dans le meme dossier. Renvoie null s'il n'est pas
+// configure ou introuvable (sans planter).
+function loadBrandImage(kind: 'logo' | 'favicon', configuredName: unknown, dir: string): BrandLogo | null {
+  const configured = clean(configuredName);
   if (!configured) return null;
   const path = isAbsolute(configured) ? configured : join(dir, configured);
   if (!existsSync(path)) {
-    logger.warn(`brand/client.json : logo introuvable (${path}), aucun logo affiche`);
+    logger.warn(`brand/client.json : ${kind} introuvable (${path}), ignore`);
     return null;
   }
   const key = `${path}:${statSync(path).mtimeMs}`;
-  if (cache && cache.key === key) return cache.logo;
+  const cached = imageCache.get(kind);
+  if (cached && cached.key === key) return cached.image;
 
   const buffer = readFileSync(path);
   const size = pngSize(buffer);
-  const logo: BrandLogo = {
+  const image: BrandLogo = {
     buffer,
     mime: MIME_BY_EXT[extname(path).toLowerCase()] ?? 'application/octet-stream',
     width: size?.width ?? null,
     height: size?.height ?? null,
   };
-  cache = { key, logo };
-  return logo;
+  imageCache.set(kind, { key, image });
+  return image;
+}
+
+// Logo du client : fichier nomme par "logo" dans brand/client.json, range dans le
+// meme dossier. Sans logo configure, l'application n'en affiche aucun (ni dans
+// l'interface, ni dans les emails) : la fonction renvoie null.
+export function getBrandLogo(file: ClientFile = readClientFile(), dir: string = brandDir()): BrandLogo | null {
+  return loadBrandImage('logo', file.logo, dir);
+}
+
+// Icone de l'onglet du navigateur : fichier nomme par "favicon" dans brand/client.json.
+// Distincte du logo, car un logo en largeur (nom de la marque) devient illisible
+// ecrase dans un carre de 16 a 32 pixels. Null si non configuree : le frontend
+// retombe alors sur le logo.
+export function getBrandFavicon(file: ClientFile = readClientFile(), dir: string = brandDir()): BrandLogo | null {
+  return loadBrandImage('favicon', file.favicon, dir);
 }
 
 // ── Couleurs derivees (emails) ──────────────────────────────────────────────

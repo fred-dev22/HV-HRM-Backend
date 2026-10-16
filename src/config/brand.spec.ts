@@ -1,7 +1,7 @@
 import { mkdtempSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { DEFAULT_ACCENT_COLOR, DEFAULT_BRAND_NAME, DEFAULT_PRIMARY_COLOR, getBrandLogo, loadBrand, tint } from './brand';
+import { DEFAULT_ACCENT_COLOR, DEFAULT_BRAND_NAME, DEFAULT_PRIMARY_COLOR, getBrandFavicon, getBrandLogo, loadBrand, tint } from './brand';
 import { readClientFile, setBrandDirForTests } from './client-file';
 import { renderEmailHtml } from '../modules/mail/email-templates';
 
@@ -123,6 +123,26 @@ describe('logo de la marque', () => {
 
   it('fichier introuvable : aucun logo, sans planter', () => {
     expect(getBrandLogo({ logo: 'inexistant.png' }, brandDir({}))).toBeNull();
+  });
+});
+
+describe('favicon de la marque', () => {
+  it('par defaut : aucune icone dediee (le frontend retombe sur le logo)', () => {
+    expect(getBrandFavicon({})).toBeNull();
+  });
+
+  it('"favicon" : fichier distinct du logo, range dans brand/', () => {
+    const dir = brandDir({ logo: 'logo.png', favicon: 'favicon.png' }, true);
+    writeFileSync(join(dir, 'favicon.png'), PNG);
+    const icon = getBrandFavicon({ logo: 'logo.png', favicon: 'favicon.png' }, dir);
+    expect(icon).not.toBeNull();
+    expect(icon!.mime).toBe('image/png');
+    // le logo reste lu a part
+    expect(getBrandLogo({ logo: 'logo.png', favicon: 'favicon.png' }, dir)).not.toBeNull();
+  });
+
+  it('fichier introuvable : aucune icone, sans planter', () => {
+    expect(getBrandFavicon({ favicon: 'absent.png' }, brandDir({}))).toBeNull();
   });
 });
 

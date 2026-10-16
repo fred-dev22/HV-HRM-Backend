@@ -7,6 +7,7 @@
   "background": "#f2f6f4",
   "tint": "#e6f4ed",
   "logo": "logo.png",
+  "favicon": "favicon.png",
   "modules": [
     "missions_expenses"
   ]

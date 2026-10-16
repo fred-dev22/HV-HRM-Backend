@@ -45,7 +45,9 @@ function clearTarget() {
   if (existsSync(file)) {
     try {
       const old = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''));
-      if (old.logo && existsSync(join(TARGET, old.logo))) rmSync(join(TARGET, old.logo));
+      for (const key of ['logo', 'favicon']) {
+        if (old[key] && existsSync(join(TARGET, old[key]))) rmSync(join(TARGET, old[key]));
+      }
     } catch {
       // fichier illisible : on le remplace de toute facon
     }
@@ -83,6 +85,7 @@ const modules = Array.isArray(p.modules) ? p.modules.map((m) => String(m).trim()
 const unknown = modules.filter((m) => !MODULES.includes(m));
 if (unknown.length) errors.push(`modules inconnus : ${unknown.join(', ')} (valeurs : ${MODULES.join(', ')})`);
 if (p.logo && !existsSync(join(source, p.logo))) errors.push(`logo introuvable : ${join(source, p.logo)}`);
+if (p.favicon && !existsSync(join(source, p.favicon))) errors.push(`favicon introuvable : ${join(source, p.favicon)}`);
 if (errors.length) fail(`profil invalide :\n  - ${errors.join('\n  - ')}`);
 
 clearTarget();

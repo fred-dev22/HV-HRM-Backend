@@ -45,6 +45,8 @@ Marque
   --background <#RRGGBB>    Fond des pages, tres clair (optionnel, defaut : gris neutre)
   --tint <#RRGGBB>          Surfaces claires : en-tetes de tableau, selections (optionnel)
   --logo <fichier>          Logo PNG/JPG/WEBP/SVG (PNG conseille : repris dans les emails)
+  --favicon <fichier>       Icone de l'onglet du navigateur : image CARREE, 180x180 ou plus
+                            (optionnelle ; absente = le logo, a eviter s'il est tout en largeur)
   --support-email <adresse> Contact affiche aux utilisateurs
 
 Modules
@@ -167,6 +169,12 @@ function buildConfig(raw, base) {
     if (!existsSync(logoPath)) errors.push(`logo introuvable : ${logoPath}`);
     else if (!LOGO_EXTENSIONS.includes(extname(logoPath).toLowerCase())) errors.push(`logo : format non supporte (${LOGO_EXTENSIONS.join(', ')})`);
     c.logoPath = logoPath;
+  }
+  if (c.favicon) {
+    const faviconPath = resolve(base, c.favicon);
+    if (!existsSync(faviconPath)) errors.push(`favicon introuvable : ${faviconPath}`);
+    else if (!LOGO_EXTENSIONS.includes(extname(faviconPath).toLowerCase())) errors.push(`favicon : format non supporte (${LOGO_EXTENSIONS.join(', ')})`);
+    c.faviconPath = faviconPath;
   }
   return { config: c, errors };
 }
@@ -319,7 +327,7 @@ function main() {
   for (const [key, value] of Object.entries(args)) {
     if (['config', 'force', 'with-sql', 'overwrite-sql', 'dry-run', 'help'].includes(key)) continue;
     raw[camel(key)] = value;
-    if (key === 'logo') base = process.cwd();
+    if (key === 'logo' || key === 'favicon') base = process.cwd();
   }
 
   const { config: c, errors } = buildConfig(raw, base);
@@ -349,6 +357,13 @@ function main() {
     if (resolve(c.logoPath) !== resolve(target)) copyFileSync(c.logoPath, target);
   }
 
+  let faviconFile = null;
+  if (c.faviconPath) {
+    faviconFile = `favicon${extname(c.faviconPath).toLowerCase()}`;
+    const target = join(dir, 'brand', faviconFile);
+    if (resolve(c.faviconPath) !== resolve(target)) copyFileSync(c.faviconPath, target);
+  }
+
   // brand/client.json : ce que le SERVEUR lit (marque, couleurs, logo, modules), sans
   // aucun secret. install.json : les choix d'installation, pour pouvoir relancer.
   const brandFile = {
@@ -359,6 +374,7 @@ function main() {
     background: c.background,
     tint: c.tint,
     logo: logoFile ?? undefined,
+    favicon: faviconFile ?? undefined,
     supportEmail: c.supportEmail,
     modules: c.modules,
   };

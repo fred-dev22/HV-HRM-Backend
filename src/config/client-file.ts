@@ -17,6 +17,8 @@ import { Logger } from '@nestjs/common';
 //     "background": "#fdeae8",           fond des pages (optionnel)
 //     "tint": "#fdeae8",                 surfaces claires : tableaux, selections (optionnel)
 //     "logo": "logo.png",                fichier du logo, dans ce dossier (optionnel)
+//     "favicon": "favicon.png",          icone de l'onglet du navigateur : image CARREE, 180x180 ou plus
+//                                        (optionnel ; absent = le logo, a eviter s'il est tout en largeur)
 //     "supportEmail": "rh@hv.com",       contact affiche (optionnel)
 //     "modules": ["recruitment", "training"],   modules optionnels actifs
 //     "jobDistributionUi": false         diffusion multi-plateformes des offres (optionnel)
@@ -35,6 +37,7 @@ export interface ClientFile {
   background?: string;
   tint?: string;
   logo?: string;
+  favicon?: string;
   supportEmail?: string;
   modules?: string[];
   jobDistributionUi?: boolean;

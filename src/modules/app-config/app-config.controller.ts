@@ -2,7 +2,7 @@ import { Controller, Get, Header, NotFoundException, Res } from '@nestjs/common'
 import { createHash } from 'crypto';
 import type { Response } from 'express';
 import { Public } from '../auth/decorators/public.decorator';
-import { getBrand, getBrandLogo } from '../../config/brand';
+import { getBrand, getBrandFavicon, getBrandLogo } from '../../config/brand';
 import { getEnabledModules } from '../../common/modules/modules.config';
 import { readClientFile } from '../../config/client-file';
 
@@ -18,18 +18,32 @@ export class AppConfigController {
   getPublicConfig() {
     const brand = getBrand();
     const logo = getBrandLogo();
+    const favicon = getBrandFavicon();
     return {
       brand: {
         ...brand,
         // Change quand le logo change : evite qu'un navigateur garde l'ancien.
         hasLogo: logo !== null,
         logoVersion: logo ? createHash('sha1').update(logo.buffer).digest('hex').slice(0, 10) : null,
+        // Icone d'onglet dediee (sinon le frontend utilise le logo).
+        hasFavicon: favicon !== null,
+        faviconVersion: favicon ? createHash('sha1').update(favicon.buffer).digest('hex').slice(0, 10) : null,
       },
       modules: getEnabledModules(),
       features: {
         jobDistributionUi: readClientFile().jobDistributionUi === true,
       },
     };
+  }
+
+  @Public()
+  @Get('favicon')
+  favicon(@Res() res: Response) {
+    const favicon = getBrandFavicon();
+    if (!favicon) throw new NotFoundException('Aucune icone configuree');
+    res.setHeader('Content-Type', favicon.mime);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(favicon.buffer);
   }
 
   @Public()

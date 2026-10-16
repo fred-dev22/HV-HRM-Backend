@@ -6,5 +6,9 @@
   "background": "#fdeae8",
   "tint": "#fdeae8",
   "logo": "logo.png",
-  "modules": ["recruitment", "training"]
+  "favicon": "favicon.png",
+  "modules": [
+    "recruitment",
+    "training"
+  ]
 }
