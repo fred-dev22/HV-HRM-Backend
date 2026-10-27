@@ -1,4 +1,4 @@
-import { ArgumentsHost, BadRequestException, Catch, ConflictException, InternalServerErrorException } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, Catch, ConflictException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { BaseExceptionFilter } from '@nestjs/core';
 import { Prisma } from '../../../prisma/generated/client';
 import { Request } from 'express';
@@ -160,6 +160,8 @@ export function buildConflictMessage(
  */
 @Catch(Prisma.PrismaClientKnownRequestError)
 export class PrismaExceptionFilter extends BaseExceptionFilter {
+  private readonly logger = new Logger(PrismaExceptionFilter.name);
+
   catch(exception: Prisma.PrismaClientKnownRequestError, host: ArgumentsHost) {
     if (exception.code === 'P2002') {
       const request = host.switchToHttp().getRequest<Request>();
@@ -181,7 +183,13 @@ export class PrismaExceptionFilter extends BaseExceptionFilter {
     // Code Prisma non mappe explicitement (P2025 "enregistrement introuvable"
     // apres suppression concurrente, etc.) — sans ce filet, Nest traite
     // l'exception comme non geree et renvoie son "Internal server error" par
-    // defaut (anglais).
+    // defaut (anglais). La cause reelle est journalisee : sans cela le 500
+    // generique rend le diagnostic impossible (colonne manquante, schema non
+    // migre...).
+    const req = host.switchToHttp().getRequest<Request>();
+    this.logger.error(
+      `${req?.method} ${req?.url} -> Prisma ${exception.code} : ${exception.message}`,
+    );
     super.catch(
       new InternalServerErrorException('Une erreur inattendue est survenue. Veuillez réessayer ou contacter le support.'),
       host,
