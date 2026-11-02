@@ -5,6 +5,7 @@ import { SetBalanceDto } from './dto/set-balance.dto';
 import { GenerateAccrualsDto } from './dto/generate-accruals.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
+import { parseListQuery } from '../../common/utils/list-query.util';
 
 @Controller('leave-transactions')
 export class LeaveTransactionController {
@@ -19,6 +20,20 @@ export class LeaveTransactionController {
   @Get('balance/mine')
   getMyBalances(@CurrentUser('employeeId') employeeId: string) {
     return this.service.getBalances(employeeId);
+  }
+
+  // Page de soldes (pagination, recherche, filtre entite, tri cote serveur).
+  @Get('balance/page')
+  @RequirePermission('CONGE_VOIR_TOUT')
+  getBalancesPage(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('sort') sort?: string,
+    @Query('dir') dir?: string,
+    @Query('entity') entity?: string,
+  ) {
+    return this.service.getBalancesPage(parseListQuery({ page, pageSize, search, sort, dir }), { entity });
   }
 
   // Doit rester avant ':employeeId' — sinon Nest matcherait "all" comme id.

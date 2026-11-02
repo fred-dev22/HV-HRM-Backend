@@ -12,7 +12,7 @@ export class CreateApprovalPoolDto {
   @IsUUID()
   OrganizationUnitId: string;
 
-  @IsIn(['Leave', 'Mission', 'ExpenseReport'])
+  @IsIn(['Leave', 'Mission', 'ExpenseReport', 'TimeEntry'])
   ObjectType: string;
 
   @IsString()

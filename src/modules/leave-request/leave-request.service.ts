@@ -16,6 +16,7 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { formatDateFr, periodSuffixFr } from '../mail/email-templates';
 import { generateApprovalToken } from '../../common/approval-token';
 import { isEligible } from '../../common/utils/eligibility.util';
+import { ListQuery, pageWindow } from '../../common/utils/list-query.util';
 import { nextReferenceCode, retryOnReferenceCodeConflict } from '../../common/utils/reference-code.util';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
@@ -51,6 +52,8 @@ const EDITABLE_STATUSES = ['Draft', 'Returned'];
 // renvoyee par l'endpoint (utilisee par le front pour patcher sa liste en
 // place) n'a pas employee/leaveType et la ligne s'affiche avec un nom et
 // des initiales vides jusqu'au prochain rechargement complet.
+const PENDING_STATUSES = ['Pending', 'InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4'];
+
 const LEAVE_REQUEST_INCLUDE = {
   employee: { select: { Id: true, FullName: true, EmployeeNumber: true } },
   leaveType: true,
@@ -203,7 +206,7 @@ export class LeaveRequestService {
     return { ...item, InsufficientBalance: balance < Number(item.DaysCount) };
   }
 
-  private attachBalanceFlags<
+  private async attachBalanceFlags<
     T extends {
       EmployeeId: string;
       LeaveTypeId: string;
@@ -211,7 +214,28 @@ export class LeaveRequestService {
       leaveType?: { DaysPerYear: unknown } | null;
     },
   >(items: T[]): Promise<(T & { InsufficientBalance: boolean })[]> {
-    return Promise.all(items.map((item) => this.attachBalanceFlag(item)));
+    // Une seule lecture des soldes pour toute la liste (avant : une requete
+    // par demande, soit des milliers sur la liste complete des RH).
+    const tracked = items.filter((i) => Number(i.leaveType?.DaysPerYear ?? 0) > 0);
+    const balances = tracked.length
+      ? await this.prisma.employeeLeaveBalance.findMany({
+          where: {
+            EmployeeId: { in: [...new Set(tracked.map((i) => i.EmployeeId))] },
+            LeaveTypeId: { in: [...new Set(tracked.map((i) => i.LeaveTypeId))] },
+          },
+          select: { EmployeeId: true, LeaveTypeId: true, Balance: true },
+        })
+      : [];
+    const balanceOf = new Map(
+      balances.map((b) => [`${b.EmployeeId}|${b.LeaveTypeId}`, Number(b.Balance)]),
+    );
+    return items.map((item) => {
+      if (Number(item.leaveType?.DaysPerYear ?? 0) <= 0) {
+        return { ...item, InsufficientBalance: false };
+      }
+      const balance = balanceOf.get(`${item.EmployeeId}|${item.LeaveTypeId}`) ?? 0;
+      return { ...item, InsufficientBalance: balance < Number(item.DaysCount) };
+    });
   }
 
   // Remonte OrganizationUnit.ParentId jusqu'a la racine — reutilise pour
@@ -820,22 +844,37 @@ export class LeaveRequestService {
   // employe (decision du 01/08, n'importe qui peut soumettre pour n'importe
   // qui) — le createur doit pouvoir suivre ce qu'il a soumis, pas seulement
   // le beneficiaire.
-  async findMine(employeeId: string) {
-    const requests = await this.prisma.leaveRequest.findMany({
-      where: {
-        OR: [{ EmployeeId: employeeId }, { CreatedBy: employeeId }],
-        IsDeleted: false,
+  async findMine(employeeId: string, window?: { from: string; to: string }) {
+    const mineInclude = {
+      leaveType: true,
+      employee: {
+        select: { Id: true, FullName: true, EmployeeNumber: true },
       },
-      include: {
-        leaveType: true,
-        employee: {
-          select: { Id: true, FullName: true, EmployeeNumber: true },
-        },
-        createdByEmployee: { select: { Id: true, FullName: true } },
-      },
-      orderBy: { CreatedAt: 'desc' },
-    });
-    return this.attachBalanceFlags(requests);
+      createdByEmployee: { select: { Id: true, FullName: true } },
+    } as const;
+    const mineWhere = { OR: [{ EmployeeId: employeeId }, { CreatedBy: employeeId }] };
+    // Sans fenetre : toute la liste (ecrans de liste). Avec fenetre : les
+    // demandes en cours + celles de la periode, et toujours les 5 plus
+    // recentes (liste "mes demandes recentes" du tableau de bord).
+    const [requests, latest] = await Promise.all([
+      window
+        ? this.findOrdered(
+            { AND: [mineWhere, { OR: this.windowWhere(window.from, window.to, false) }], IsDeleted: false },
+            [{ CreatedAt: 'desc' }, { Id: 'asc' }],
+            undefined,
+            mineInclude,
+          )
+        : this.findOrdered({ ...mineWhere, IsDeleted: false }, [{ CreatedAt: 'desc' }, { Id: 'asc' }], undefined, mineInclude),
+      window
+        ? this.findOrdered({ ...mineWhere, IsDeleted: false }, [{ CreatedAt: 'desc' }, { Id: 'asc' }], 5, mineInclude)
+        : Promise.resolve([]),
+    ]);
+    const byId = new Map(requests.map((r) => [r.Id, r]));
+    for (const r of latest) byId.set(r.Id, r);
+    const merged = [...byId.values()].sort(
+      (a, b) => b.CreatedAt.getTime() - a.CreatedAt.getTime(),
+    );
+    return this.attachBalanceFlags(merged);
   }
 
   async findTeam(managerEmployeeId: string) {
@@ -890,32 +929,170 @@ export class LeaveRequestService {
     return collected;
   }
 
-  async findAll() {
-    const requests = await this.prisma.leaveRequest.findMany({
-      where: { IsDeleted: false },
-      include: LEAVE_REQUEST_INCLUDE,
-      orderBy: { CreatedAt: 'desc' },
+  // Fenetre bornee, pour tout ce qui se charge a la connexion (tableau de bord,
+  // barre laterale, rafraichissement temps reel) : le volume ne doit pas
+  // grossir avec les annees de demandes. Contenu = les demandes encore en
+  // cours de validation (file d'attente, bornee par le circuit) + celles dont
+  // la periode chevauche [from, to] + (liste globale seulement) celles
+  // approuvees depuis le debut du mois. Sans fenetre, la liste complete reste
+  // disponible pour les ecrans de liste, charges a la demande.
+  private windowWhere(from: string, to: string, withApprovedThisMonth: boolean) {
+    const isDay = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(v));
+    if (!isDay(from) || !isDay(to) || from > to) {
+      throw new BadRequestException('Fenetre de dates invalide (from/to au format AAAA-MM-JJ).');
+    }
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const or: Array<Record<string, unknown>> = [
+      { Status: { in: ['Pending', 'InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4'] } },
+      { StartDate: { lte: new Date(to) }, EndDate: { gte: new Date(from) } },
+    ];
+    if (withApprovedThisMonth) {
+      or.push({
+        Status: { in: ['Approved', 'Registered', 'Done', 'Regularized'] },
+        OR: [{ ModifiedAt: { gte: monthStart } }, { ModifiedAt: null, CreatedAt: { gte: monthStart } }],
+      });
+    }
+    return or;
+  }
+
+  async findAll(window?: { from: string; to: string }) {
+    const requests = await this.findOrdered(
+      {
+        IsDeleted: false,
+        ...(window ? { OR: this.windowWhere(window.from, window.to, true) } : {}),
+      },
+      [{ CreatedAt: 'desc' }, { Id: 'asc' }],
+      undefined,
+      LEAVE_REQUEST_INCLUDE,
+    );
+    return this.attachBalanceFlags(requests);
+  }
+
+  // Lit les demandes d'un `where` dans un ordre donne. Le tri porte d'abord sur
+  // les seuls identifiants (lignes etroites : rapide meme sur des dizaines de
+  // milliers de demandes sans index sur la date), puis on charge le detail des
+  // lignes retenues. Un tri direct sur les lignes completes (avec relations)
+  // depassait le delai de 15 s a 25 000 demandes.
+  private async findOrdered<I extends Record<string, unknown>>(
+    where: Record<string, unknown>,
+    orderBy: Record<string, unknown>[],
+    take: number | undefined,
+    include: I,
+  ) {
+    const idRows = await this.prisma.leaveRequest.findMany({
+      where,
+      select: { Id: true },
+      orderBy,
+      take,
     });
+    const ids = idRows.map((r) => r.Id);
+    if (ids.length === 0) return [];
+    const details = await this.prisma.leaveRequest.findMany({ where: { Id: { in: ids } }, include });
+    const byId = new Map(details.map((r) => [r.Id, r]));
+    return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
+  }
+
+  // Liste paginee des demandes (ecran "Demandes d'absence"). `scope` : all
+  // (CONGE_VOIR_TOUT), team (CONGE_VOIR_EQUIPE) ou mine. Memes regles de
+  // filtre que l'ecran avant la pagination :
+  //  - Pending = toutes les etapes en cours de validation
+  //  - Consumed = approuvee dont la date de fin est passee
+  //  - Approved = approuvee a venir ou en cours
+  async findPage(
+    scope: 'all' | 'team' | 'mine',
+    employeeId: string,
+    q: ListQuery,
+    f: { status?: string; type?: string; from?: string; to?: string },
+  ) {
+    const and: Record<string, unknown>[] = [{ IsDeleted: false }];
+    if (scope === 'mine') {
+      and.push({ OR: [{ EmployeeId: employeeId }, { CreatedBy: employeeId }] });
+    } else if (scope === 'team') {
+      const unitIds = await this.collectManagedUnitIds(employeeId);
+      if (unitIds.length === 0) return { items: [], total: 0, meta: { pending: 0 } };
+      and.push({ employee: { OrganizationUnitId: { in: unitIds } } });
+    }
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    if (f.status === 'Pending') and.push({ Status: { in: PENDING_STATUSES } });
+    else if (f.status === 'Consumed') and.push({ Status: 'Approved', EndDate: { lt: today } });
+    else if (f.status === 'Approved') and.push({ Status: 'Approved', EndDate: { gte: today } });
+    else if (f.status) and.push({ Status: f.status });
+    if (f.type) and.push({ LeaveTypeId: f.type });
+    if (f.from) and.push({ StartDate: { gte: new Date(f.from) } });
+    if (f.to) and.push({ EndDate: { lte: new Date(f.to) } });
+    if (q.search) {
+      and.push({
+        OR: [
+          { employee: { FullName: { contains: q.search } } },
+          { leaveType: { Name: { contains: q.search } } },
+        ],
+      });
+    }
+    const where = { AND: and };
+
+    const SORTS: Record<string, (d: 'asc' | 'desc') => Record<string, unknown>> = {
+      employee: (d) => ({ employee: { FullName: d } }),
+      type: (d) => ({ leaveType: { Name: d } }),
+      days: (d) => ({ DaysCount: d }),
+      submitted: (d) => ({ CreatedAt: d }),
+      status: (d) => ({ Status: d }),
+    };
+    const primary = q.sort && SORTS[q.sort] ? SORTS[q.sort]!(q.dir) : { CreatedAt: 'desc' };
+
+    // Tri et pagination sur les seuls identifiants (lignes etroites : tres
+    // rapide meme sur des dizaines de milliers de demandes sans index sur la
+    // date), puis chargement du detail des 10-50 lignes de la page.
+    const [idRows, total, pending] = await Promise.all([
+      this.prisma.leaveRequest.findMany({
+        where,
+        select: { Id: true },
+        orderBy: [primary, { Id: 'asc' }],
+        ...pageWindow(q),
+      }),
+      this.prisma.leaveRequest.count({ where }),
+      this.prisma.leaveRequest.count({ where: { AND: [...and, { Status: { in: PENDING_STATUSES } }] } }),
+    ]);
+    const ids = idRows.map((r) => r.Id);
+    const details = ids.length
+      ? await this.prisma.leaveRequest.findMany({ where: { Id: { in: ids } }, include: LEAVE_REQUEST_INCLUDE })
+      : [];
+    const byId = new Map(details.map((r) => [r.Id, r]));
+    const rows = ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
+    return { items: await this.attachBalanceFlags(rows), total, meta: { pending } };
+  }
+
+  // Les dernieres demandes approuvees (onglet "Recents approuves" du tableau de
+  // bord RH), toutes periodes confondues, sans charger tout l'historique.
+  async findRecentlyApproved(limit = 10) {
+    const requests = await this.findOrdered(
+      { IsDeleted: false, Status: 'Approved' },
+      [{ CreatedAt: 'desc' }, { Id: 'asc' }],
+      Math.min(Math.max(limit, 1), 50),
+      LEAVE_REQUEST_INCLUDE,
+    );
     return this.attachBalanceFlags(requests);
   }
 
   async findPendingForMe(employeeId: string) {
-    const inApproval = await this.prisma.leaveRequest.findMany({
-      where: {
+    const inApproval = await this.findOrdered(
+      {
         Status: {
           in: ['InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4'],
         },
         IsDeleted: false,
       },
-      include: {
+      [{ CreatedAt: 'asc' }, { Id: 'asc' }],
+      undefined,
+      {
         employee: {
           select: { Id: true, FullName: true, EmployeeNumber: true },
         },
         createdByEmployee: { select: { Id: true, FullName: true } },
         leaveType: true,
       },
-      orderBy: { CreatedAt: 'asc' },
-    });
+    );
     const now = new Date();
     const result: typeof inApproval = [];
     for (const lr of inApproval) {

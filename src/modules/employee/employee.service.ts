@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../prisma/generated/client';
+import { ListQuery, pageWindow } from '../../common/utils/list-query.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
@@ -190,19 +191,25 @@ export class EmployeeService {
   // vrai membre du personnel, ne doit jamais apparaitre dans une liste ou
   // un selecteur (voir migration IsSystem + prisma/backfill-employee-is-system.ts).
   async findAll() {
-    const employees = await this.prisma.employee.findMany({
-      where: { IsSystem: false, IsDeleted: false },
-      include: {
-        user: {
-          select: {
-            IsActive: true,
-            userPermissions: {
-              select: { permission: { select: { Code: true } } },
-            },
-          },
-        },
-      },
-    });
+    // Seules 3 permissions nous interessent : on ne relit plus les ~40
+    // permissions de CHAQUE employe (avant : quelques dizaines de milliers de
+    // lignes a la connexion d'un RH pour une entreprise de 1000 personnes).
+    const [employees, grants] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: { IsSystem: false, IsDeleted: false },
+        include: { user: { select: { Id: true, IsActive: true } } },
+      }),
+      this.prisma.userPermission.findMany({
+        where: { permission: { Code: { in: [...VALIDATOR_PERMISSION_CODES] } } },
+        select: { UserId: true, permission: { select: { Code: true } } },
+      }),
+    ]);
+    const grantedByUser = new Map<string, Set<string>>();
+    for (const g of grants) {
+      const set = grantedByUser.get(g.UserId) ?? new Set<string>();
+      set.add(g.permission.Code);
+      grantedByUser.set(g.UserId, set);
+    }
     // ValidatorPermissions : droits de validation REELLEMENT accordes au
     // compte (voir VALIDATOR_PERMISSION_CODES en tete de fichier). Compte
     // inactif ou absent => liste vide. Le champ `user` brut est retire de la
@@ -211,10 +218,92 @@ export class EmployeeService {
       ...employee,
       ValidatorPermissions: user?.IsActive
         ? VALIDATOR_PERMISSION_CODES.filter((code) =>
-            user.userPermissions.some((up) => up.permission.Code === code),
+            grantedByUser.get(user.Id)?.has(code),
           )
         : [],
     }));
+  }
+
+  // Liste paginee des employes (ecran "Gestion des employes") : recherche,
+  // filtres et tri sur TOUTE la base. `meta` porte les 4 compteurs de l'en-tete
+  // (total, actifs, essai, managers/RH), toujours calcules sur l'ensemble et
+  // jamais sur la page ou le filtre courant.
+  async findPage(
+    q: ListQuery,
+    f: { status?: string; entity?: string; category?: string; contract?: string },
+  ) {
+    const base = { IsSystem: false, IsDeleted: false };
+    const and: Record<string, unknown>[] = [base];
+    if (f.status) and.push({ Status: f.status });
+    if (f.entity) and.push({ OrganizationUnitId: f.entity });
+    if (f.category) and.push({ EmployeeCategoryId: f.category });
+    if (f.contract) and.push({ ContractType: f.contract });
+    if (q.search) {
+      and.push({
+        OR: [
+          { FullName: { contains: q.search } },
+          { EmployeeNumber: { contains: q.search } },
+          { position: { Title: { contains: q.search } } },
+        ],
+      });
+    }
+    const where = { AND: and };
+    const SORTS: Record<string, (d: 'asc' | 'desc') => Record<string, unknown>> = {
+      code: (d) => ({ EmployeeNumber: d }),
+      employee: (d) => ({ FullName: d }),
+      jobTitle: (d) => ({ position: { Title: d } }),
+      entityName: (d) => ({ organizationUnit: { Name: d } }),
+      hireDate: (d) => ({ HireDate: d }),
+    };
+    const primary = q.sort && SORTS[q.sort] ? SORTS[q.sort]!(q.dir) : { EmployeeNumber: 'asc' };
+
+    const [rows, total, kTotal, kActive, kTrial, validators, directory] = await Promise.all([
+      this.prisma.employee.findMany({
+        where,
+        include: { user: { select: { Id: true, IsActive: true } } },
+        orderBy: [primary, { Id: 'asc' }],
+        ...pageWindow(q),
+      }),
+      this.prisma.employee.count({ where }),
+      this.prisma.employee.count({ where: base }),
+      this.prisma.employee.count({ where: { ...base, Status: 'Active' } }),
+      this.prisma.employee.count({ where: { ...base, Status: 'OnTrial' } }),
+      // Managers / RH : comptes actifs ayant au moins un droit de validation.
+      this.prisma.user.count({
+        where: {
+          IsActive: true,
+          employee: { is: base },
+          userPermissions: { some: { permission: { Code: { in: [...VALIDATOR_PERMISSION_CODES] } } } },
+        },
+      }),
+      // Rang de chaque employe dans la liste complete (meme requete, meme ordre
+      // que GET /employees) : le frontend en tire la couleur d'avatar, qui reste
+      // ainsi la meme que dans l'ancienne liste complete.
+      this.prisma.employee.findMany({ where: base, select: { Id: true } }),
+    ]);
+    const paletteIndexOf = new Map<string, number>(directory.map((e, i) => [e.Id, i] as [string, number]));
+
+    const userIds = rows.map((r) => r.user?.Id).filter((id): id is string => !!id);
+    const grants = userIds.length
+      ? await this.prisma.userPermission.findMany({
+          where: { UserId: { in: userIds }, permission: { Code: { in: [...VALIDATOR_PERMISSION_CODES] } } },
+          select: { UserId: true, permission: { select: { Code: true } } },
+        })
+      : [];
+    const grantedByUser = new Map<string, Set<string>>();
+    for (const g of grants) {
+      const set = grantedByUser.get(g.UserId) ?? new Set<string>();
+      set.add(g.permission.Code);
+      grantedByUser.set(g.UserId, set);
+    }
+    const items = rows.map(({ user, ...employee }) => ({
+      ...employee,
+      PaletteIndex: paletteIndexOf.get(employee.Id) ?? 0,
+      ValidatorPermissions: user?.IsActive
+        ? VALIDATOR_PERMISSION_CODES.filter((code) => grantedByUser.get(user.Id)?.has(code))
+        : [],
+    }));
+    return { items, total, meta: { total: kTotal, active: kActive, trial: kTrial, validators } };
   }
 
   // Annuaire minimal, ouvert a tout employe authentifie (pas de permission

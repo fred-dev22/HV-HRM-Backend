@@ -3,6 +3,7 @@ import { Prisma } from '../../../prisma/generated/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
 import { isEligible } from '../../common/utils/eligibility.util';
+import { ListQuery } from '../../common/utils/list-query.util';
 
 type TxClient = Prisma.TransactionClient | PrismaService;
 
@@ -63,7 +64,7 @@ export class LeaveTransactionService {
   // d'eligibilite (genre/expatrie/entite) est propre a chaque employe, donc
   // recalcule ligne par ligne plutot que sur une liste de types commune.
   async getAllBalances() {
-    const [employees, balances, leaveTypes] = await Promise.all([
+    const [employees, balances, leaveTypes, directory] = await Promise.all([
       this.prisma.employee.findMany({
         where: {
           Status: { in: ['Active', 'OnTrial'] },
@@ -73,6 +74,8 @@ export class LeaveTransactionService {
         select: {
           Id: true,
           EmployeeNumber: true,
+          FirstName: true,
+          LastName: true,
           FullName: true,
           Gender: true,
           IsExpatriate: true,
@@ -82,10 +85,20 @@ export class LeaveTransactionService {
       }),
       this.prisma.employeeLeaveBalance.findMany(),
       this.prisma.leaveType.findMany({ where: { IsActive: true } }),
+      // Rang de chaque employe dans la liste des employes (meme requete, meme
+      // ordre que GET /employees) : le frontend en tire la couleur d'avatar,
+      // ce qui lui evite de charger toute la liste des employes juste pour ca.
+      this.prisma.employee.findMany({
+        where: { IsSystem: false, IsDeleted: false },
+        select: { Id: true },
+      }),
     ]);
+    const paletteIndexOf = new Map(directory.map((e, i) => [e.Id, i]));
 
     return employees.map((employee) => ({
       employeeId: employee.Id,
+      initials: (employee.FirstName.charAt(0) + employee.LastName.charAt(0)).toUpperCase(),
+      paletteIndex: paletteIndexOf.get(employee.Id) ?? 0,
       // Matricule : utilise par l'export configurable (import Sage paie).
       employeeNumber: employee.EmployeeNumber,
       employeeName: employee.FullName,
@@ -105,6 +118,114 @@ export class LeaveTransactionService {
           ),
         })),
     }));
+  }
+
+  // Page de soldes (ecran "Soldes" et widget du tableau de bord) : meme forme
+  // de ligne que getAllBalances, mais pagine, recherche et trie cote serveur.
+  //  - entity : nom de l'entite (filtre)
+  //  - sort   : 'name' (defaut) ou l'identifiant d'un type de conge (tri sur le solde)
+  // `meta` porte ce qui ne depend ni du filtre ni de la page : nombre
+  // d'employes suivis, colonnes (types de conge presents chez au moins un
+  // employe eligible) et total des soldes par type sur toute l'entreprise.
+  async getBalancesPage(q: ListQuery, f: { entity?: string }) {
+    const tracked = {
+      Status: { in: ['Active', 'OnTrial'] },
+      IsSystem: false,
+      IsDeleted: false,
+    };
+    const [all, leaveTypes, balances, directory] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: tracked,
+        select: {
+          Id: true,
+          FullName: true,
+          Gender: true,
+          IsExpatriate: true,
+          OrganizationUnitId: true,
+          organizationUnit: { select: { Name: true } },
+        },
+      }),
+      this.prisma.leaveType.findMany({ where: { IsActive: true } }),
+      this.prisma.employeeLeaveBalance.findMany({
+        select: { EmployeeId: true, LeaveTypeId: true, Balance: true },
+      }),
+      this.prisma.employee.findMany({
+        where: { IsSystem: false, IsDeleted: false },
+        select: { Id: true },
+      }),
+    ]);
+
+    const balanceOf = new Map(
+      balances.map((b) => [`${b.EmployeeId}|${b.LeaveTypeId}`, Number(b.Balance)] as [string, number]),
+    );
+    const eligible = (e: (typeof all)[number]) => leaveTypes.filter((lt) => isEligible(lt, e));
+
+    // Meta sur l'ensemble des employes suivis.
+    const totals = new Map<string, number>();
+    const columnIds = new Set<string>();
+    for (const e of all) {
+      for (const lt of eligible(e)) {
+        columnIds.add(lt.Id);
+        totals.set(lt.Id, (totals.get(lt.Id) ?? 0) + (balanceOf.get(`${e.Id}|${lt.Id}`) ?? 0));
+      }
+    }
+    const columns = leaveTypes
+      .filter((lt) => columnIds.has(lt.Id))
+      .map((lt) => ({
+        leaveTypeId: lt.Id,
+        leaveTypeName: lt.Name,
+        leaveTypeCode: lt.Code,
+        color: lt.Color,
+        daysPerYear: Number(lt.DaysPerYear),
+        total: Math.round((totals.get(lt.Id) ?? 0) * 100) / 100,
+      }));
+
+    // Filtre, recherche et tri sur la liste legere, puis on ne detaille que la page.
+    const needle = q.search?.toLowerCase();
+    let list = all.filter(
+      (e) =>
+        (!f.entity || e.organizationUnit?.Name === f.entity) &&
+        (!needle || e.FullName.toLowerCase().includes(needle)),
+    );
+    const sortByType = q.sort && q.sort !== 'name' && leaveTypes.some((lt) => lt.Id === q.sort);
+    list = [...list].sort((a, b) => {
+      const cmp = sortByType
+        ? (balanceOf.get(`${a.Id}|${q.sort}`) ?? 0) - (balanceOf.get(`${b.Id}|${q.sort}`) ?? 0)
+        : a.FullName.localeCompare(b.FullName, 'fr');
+      return q.dir === 'desc' ? -cmp : cmp;
+    });
+    const total = list.length;
+    const pageRows = list.slice((q.page - 1) * q.pageSize, q.page * q.pageSize);
+
+    const details = pageRows.length
+      ? await this.prisma.employee.findMany({
+          where: { Id: { in: pageRows.map((e) => e.Id) } },
+          select: { Id: true, EmployeeNumber: true, FirstName: true, LastName: true },
+        })
+      : [];
+    const detailOf = new Map(details.map((d) => [d.Id, d]));
+    const paletteIndexOf = new Map(directory.map((e, i) => [e.Id, i] as [string, number]));
+
+    const items = pageRows.map((e) => {
+      const d = detailOf.get(e.Id);
+      return {
+        employeeId: e.Id,
+        employeeNumber: d?.EmployeeNumber,
+        employeeName: e.FullName,
+        initials: d ? (d.FirstName.charAt(0) + d.LastName.charAt(0)).toUpperCase() : '',
+        paletteIndex: paletteIndexOf.get(e.Id) ?? 0,
+        entityName: e.organizationUnit?.Name ?? '',
+        balances: eligible(e).map((lt) => ({
+          leaveTypeId: lt.Id,
+          leaveTypeName: lt.Name,
+          leaveTypeCode: lt.Code,
+          color: lt.Color,
+          daysPerYear: Number(lt.DaysPerYear),
+          balance: balanceOf.get(`${e.Id}|${lt.Id}`) ?? 0,
+        })),
+      };
+    });
+    return { items, total, meta: { tracked: all.length, columns } };
   }
 
   // Credite (ou debite si type='Consumption') le solde en cache d'un employe

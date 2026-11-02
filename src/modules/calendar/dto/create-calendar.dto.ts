@@ -28,6 +28,12 @@ export class CreateCalendarDto {
   @IsUUID()
   EmployeeCategoryId?: string;
 
+  // Calendrier propre a un employe (module Temps de travail). Exclusif avec
+  // EmployeeCategoryId et IsDefault ; un employe n'a jamais plus d'un calendrier.
+  @IsOptional()
+  @IsUUID()
+  EmployeeId?: string;
+
   // Exactly one row per day of the week (Monday..Sunday) — the frontend
   // always sends the full week, replaced atomically on update.
   @ValidateNested({ each: true })

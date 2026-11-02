@@ -31,7 +31,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const MODULES = ['missions_expenses', 'recruitment', 'training', 'deadlines', 'payroll', 'reports'];
+const MODULES = ['missions_expenses', 'recruitment', 'training', 'deadlines', 'time', 'payroll', 'reports'];
 const LOGO_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.svg'];
 
 const HELP = `Usage : node scripts/new-client.mjs [options]

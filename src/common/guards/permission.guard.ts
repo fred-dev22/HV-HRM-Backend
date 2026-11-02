@@ -41,10 +41,7 @@ export class PermissionGuard implements CanActivate {
       throw new UnauthorizedException('Authentification requise');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { Id: userId },
-      include: { userPermissions: { include: { permission: true } }, employee: true },
-    });
+    const user = await this.loadUser(userId);
 
     if (!user || !user.IsActive) {
       throw new UnauthorizedException('Ce compte a été désactivé');
@@ -79,5 +76,32 @@ export class PermissionGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  // Un tableau de bord lance une dizaine d'appels en meme temps : chacun
+  // relisait le meme utilisateur et ses ~130 permissions, et le serveur les
+  // traitait quasiment un par un. Les appels simultanes d'un meme compte
+  // partagent donc UNE lecture (aucune donnee gardee une fois la lecture
+  // terminee : un retrait de droit reste effectif a la requete suivante).
+  private readonly inFlight = new Map<string, ReturnType<PermissionGuard['queryUser']>>();
+
+  private loadUser(userId: string) {
+    let pending = this.inFlight.get(userId);
+    if (!pending) {
+      pending = this.queryUser(userId).finally(() => this.inFlight.delete(userId));
+      this.inFlight.set(userId, pending);
+    }
+    return pending;
+  }
+
+  private async queryUser(userId: string) {
+    return this.prisma.user.findUnique({
+      where: { Id: userId },
+      select: {
+        IsActive: true,
+        employee: { select: { IsDeleted: true, Status: true } },
+        userPermissions: { select: { permission: { select: { Code: true } } } },
+      },
+    });
   }
 }

@@ -69,7 +69,48 @@ export class AuthService {
       mustChangePassword: user.MustChangePassword,
     };
 
-    return { accessToken: this.jwtService.sign(payload) };
+    // La session (permissions, fiche employe, nom de l'unite) part avec le
+    // token : le frontend n'enchaine plus 3 appels avant d'afficher quoi que
+    // ce soit (chaque aller-retour coute cher sur un serveur distant).
+    const session = await this.loadSession(user.Id, user.employee, user.employeeCategory.Name);
+
+    return { accessToken: this.jwtService.sign(payload), session };
+  }
+
+  // Meme contenu que la session renvoyee au login — sert a restaurer la
+  // session au rechargement de la page (le JWT persiste, pas l'etat memoire).
+  async getSession(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { Id: userId },
+      include: { employee: true, employeeCategory: true },
+    });
+    if (!user || !user.IsActive || !user.employee || user.employee.IsDeleted) {
+      throw new UnauthorizedException('Compte introuvable');
+    }
+    return this.loadSession(user.Id, user.employee, user.employeeCategory.Name);
+  }
+
+  private async loadSession(
+    userId: string,
+    employee: { OrganizationUnitId: string },
+    categoryName: string,
+  ) {
+    const [userPermissions, unit] = await Promise.all([
+      this.prisma.userPermission.findMany({
+        where: { UserId: userId },
+        select: { permission: { select: { Code: true } } },
+      }),
+      this.prisma.organizationUnit.findUnique({
+        where: { Id: employee.OrganizationUnitId },
+        select: { Name: true },
+      }),
+    ]);
+    return {
+      categoryName,
+      permissions: userPermissions.map((up) => up.permission.Code),
+      employee,
+      organizationUnitName: unit?.Name ?? null,
+    };
   }
 
   // Auto-only (userId vient du JWT, jamais d'un parametre de route) — sert a

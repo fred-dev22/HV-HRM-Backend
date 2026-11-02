@@ -1,4 +1,4 @@
-import { Body, Controller, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -19,6 +19,11 @@ export class AuthController {
 
   // Pas de @RequirePermission : la portee "soi-meme" vient de @CurrentUser
   // ('sub'), jamais d'un id de route — impossible de cibler un autre compte.
+  @Get('session')
+  session(@CurrentUser('sub') userId: string) {
+    return this.authService.getSession(userId);
+  }
+
   @Patch('change-password')
   changePassword(@CurrentUser('sub') userId: string, @Body() dto: ChangePasswordDto) {
     return this.authService.changePassword(userId, dto);

@@ -222,6 +222,13 @@ model Employee {
   // au-dessus) : traite comme auto-approbation, meme regle que pour le pool.
   DirectValidatorId String? @db.UniqueIdentifier
 
+  // Module Temps de travail : un cadre est exclu du calcul des heures
+  // supplementaires (reprise de la regle isBe du systeme Pointage). BiometricUuid
+  // = identifiant de l'employe dans la pointeuse Morpho (colonne 0 des exports),
+  // le rapprochement se fait d'abord par matricule.
+  IsCadre       Boolean @default(false)
+  BiometricUuid String? @db.NVarChar(100)
+
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier
@@ -267,6 +274,7 @@ model Employee {
 
   companySettingsModified CompanySettings[] @relation("CompanySettingsModifiedBy")
 
+  calendarsOwn      Calendar[] @relation("CalendarEmployee")
   calendarsCreated  Calendar[] @relation("CalendarCreatedBy")
   calendarsModified Calendar[] @relation("CalendarModifiedBy")
 
@@ -320,6 +328,14 @@ model Employee {
   categoryPermissionsGranted CategoryPermission[] @relation("CategoryPermissionCreatedBy")
 
   notifications Notification[]
+
+  // Module Temps de travail
+  timeManualEntries          TimeManualEntry[]  @relation("TimeManualEntryEmployee")
+  timeManualEntriesSubmitted TimeManualEntry[]  @relation("TimeManualEntrySubmittedBy")
+  timeManualEntriesValidated TimeManualEntry[]  @relation("TimeManualEntryValidatedBy")
+  timeMorphoRecords          TimeMorphoRecord[]
+  timeDailyHours             TimeDailyHours[]
+  timeOvertimes              TimeOvertime[]
 
   // Module Formation : inscriptions de l'employe, et demandes faites par lui
   trainingEnrollments          TrainingEnrollment[] @relation("TrainingEnrollmentEmployee")
@@ -543,7 +559,7 @@ model ApprovalPoolMember {
 model ApprovalDecision {
   Id String @id @default(uuid()) @db.UniqueIdentifier
 
-  // EntityType: LeaveRequest | MissionOrder | ExpenseReport
+  // EntityType: LeaveRequest | MissionOrder | ExpenseReport | TimeEntry
   EntityType                String    @db.NVarChar(30)
   // ID de la demande concernee (LeaveRequest, MissionOrder ou ExpenseReport
   // selon EntityType) — reference polymorphique, pas de FK Prisma.
@@ -642,16 +658,29 @@ model Calendar {
   // categorie uniquement, pas de surcharge par employe individuel).
   EmployeeCategoryId String? @unique @db.UniqueIdentifier
 
+  // Calendrier propre a UN employe (module Temps de travail : le systeme
+  // Pointage resout employe > groupe > global, et le client l'utilise). Un
+  // calendrier est soit global, soit de categorie, soit d'employe, jamais deux
+  // a la fois (verifie par CalendarService). Resolution : employe > categorie
+  // > global. Les conges gardent leur resolution categorie > global.
+  // Pas de @unique : sous SQL Server une contrainte unique n'accepte qu'un seul
+  // NULL, ce que tous les calendriers global/categorie violeraient. L'unicite par
+  // employe est verifiee par CalendarService.
+  EmployeeId String? @db.UniqueIdentifier
+
   CreatedBy  String    @db.UniqueIdentifier
   CreatedAt  DateTime  @default(now()) @db.DateTime2
   ModifiedBy String?   @db.UniqueIdentifier
   ModifiedAt DateTime? @db.DateTime2
 
   employeeCategory   EmployeeCategory? @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employee           Employee?         @relation("CalendarEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   createdByEmployee  Employee          @relation("CalendarCreatedBy", fields: [CreatedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   modifiedByEmployee Employee?         @relation("CalendarModifiedBy", fields: [ModifiedBy], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
   workDays CalendarWorkDay[]
+
+  @@index([EmployeeId])
 }
 
 /// Configuration horaire d'un jour de la semaine pour un Calendar donne.
@@ -2011,4 +2040,200 @@ model TrainingBudgetLine {
 
   @@index([Year])
   @@index([RequestStatus])
+}
+
+// =========================================================================
+// MODULE TEMPS DE TRAVAIL (branche dev-time-module)
+//
+// Pointage biometrique (Morpho), saisies de temps, heures supplementaires et
+// export Sage. Reprise du systeme Pointage (NestJS/TypeORM) : l'employe n'a
+// plus de table propre, tout se rattache a Employee (par matricule). Les
+// horaires viennent du Calendar du HRM, les jours feries de Holiday, la
+// validation des saisies de ApprovalDecision (EntityType = 'TimeEntry').
+// Tables prefixees Time* ; aucune n'est lue par le socle.
+// =========================================================================
+
+/// Parametres numeriques du calcul (panier_min_hours, night_window_start_hour,
+/// night_window_end_hour, weekly_hs01_threshold_hours, monthly_ni_cap_hours...).
+model TimeSetting {
+  Id    String  @id @default(uuid()) @db.UniqueIdentifier
+  Key   String  @unique @db.NVarChar(60)
+  Value Decimal @db.Decimal(18, 4)
+  Label String  @db.NVarChar(150)
+}
+
+/// Famille de codes de presence, avec son code de type pour l'export Sage
+/// (255 / 0 / 3 dans l'export actuel).
+model TimeAttendanceType {
+  Id           String  @id @default(uuid()) @db.UniqueIdentifier
+  Name         String  @unique @db.NVarChar(100)
+  Description  String? @db.NVarChar(300)
+  SageTypeCode Int?
+
+  codes TimeAttendanceCode[]
+}
+
+/// Code de paie (HS01 a HS10, panier, permanence...), `Code` est la valeur
+/// ecrite dans l'export Sage.
+model TimeAttendanceCode {
+  Id          String  @id @default(uuid()) @db.UniqueIdentifier
+  TypeId      String  @db.UniqueIdentifier
+  Code        String  @unique @db.NVarChar(20)
+  Description String? @db.NVarChar(300)
+
+  type      TimeAttendanceType @relation(fields: [TypeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  overtimes TimeOvertime[]
+
+  @@index([TypeId])
+}
+
+/// Montant de la prime de permanence selon le type de jour.
+model TimePermanenceRate {
+  Id      String  @id @default(uuid()) @db.UniqueIdentifier
+  // DayType: OUVRABLE | SAMEDI | DIMANCHE_FERIE
+  DayType String  @unique @db.NVarChar(20)
+  Amount  Decimal @db.Decimal(18, 2)
+}
+
+/// Configuration de l'import des fichiers de la pointeuse (une seule ligne).
+model TimeMorphoConfig {
+  Id               String    @id @default(uuid()) @db.UniqueIdentifier
+  FolderPath       String?   @db.NVarChar(500)
+  CronSchedule     String?   @db.NVarChar(60)
+  IsScheduleActive Boolean   @default(false)
+  ModifiedAt       DateTime? @db.DateTime2
+}
+
+/// Un fichier Excel importe depuis la pointeuse.
+model TimeMorphoImport {
+  Id               String   @id @default(uuid()) @db.UniqueIdentifier
+  FileName         String   @db.NVarChar(260)
+  ImportDate       DateTime @default(now()) @db.DateTime2
+  // Status: Pending | Processing | Completed | Failed
+  Status           String   @db.NVarChar(20)
+  // TriggeredBy: manual | schedule
+  TriggeredBy      String   @db.NVarChar(20)
+  TotalRecords     Int      @default(0)
+  ProcessedRecords Int      @default(0)
+  ErrorCount       Int      @default(0)
+  ErrorDetails     String?  @db.NVarChar(Max)
+
+  records TimeMorphoRecord[]
+
+  @@index([FileName])
+}
+
+/// Premier et dernier pointage d'un employe pour un jour. EmployeeId reste
+/// null tant que le matricule n'est pas rapproche (visible dans le rapport
+/// d'import, rattrapable ensuite).
+model TimeMorphoRecord {
+  Id              String   @id @default(uuid()) @db.UniqueIdentifier
+  ImportId        String   @db.UniqueIdentifier
+  EmployeeId      String?  @db.UniqueIdentifier
+  BiometricUuid   String   @db.NVarChar(100)
+  EmployeeNumber  String   @db.NVarChar(20)
+  FirstName       String   @db.NVarChar(100)
+  LastName        String   @db.NVarChar(100)
+  Departement     String?  @db.NVarChar(150)
+  Fonction        String?  @db.NVarChar(150)
+  DateJour        DateTime @db.Date
+  PremierPointage DateTime @db.DateTime2
+  DernierPointage DateTime @db.DateTime2
+
+  import   TimeMorphoImport @relation(fields: [ImportId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  employee Employee?        @relation(fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([ImportId])
+  @@index([EmployeeId, DateJour])
+  @@index([EmployeeNumber, DateJour])
+}
+
+/// Saisie de temps (mission, reunion, panier, permanence, correction de
+/// pointage). La validation passe par ApprovalDecision (EntityType = 'TimeEntry').
+model TimeManualEntry {
+  Id              String    @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId      String    @db.UniqueIdentifier
+  SubmittedById   String    @db.UniqueIdentifier
+  ValidatedById   String?   @db.UniqueIdentifier
+  Date            DateTime  @db.Date
+  Hours           Decimal   @db.Decimal(6, 2)
+  // Status: Pending | Approved | Rejected | Cancelled
+  Status          String    @db.NVarChar(20)
+  // Circuit de validation du HRM : pool applicable (null = validateur direct de
+  // l'employe) et niveau en cours, voir TimeEntryService.
+  ApprovalPoolId      String? @db.UniqueIdentifier
+  CurrentApprovalStep Int?
+  // EntryType: mission | reunion_exterieure | travail_hors_site | travail_sur_site | permanence | panier
+  EntryType       String?   @db.NVarChar(30)
+  RejectionReason String?   @db.NVarChar(500)
+  FirstClockIn    DateTime? @db.DateTime2
+  LastClockOut    DateTime? @db.DateTime2
+  Comments        String?   @db.NVarChar(500)
+  CreatedAt       DateTime  @default(now()) @db.DateTime2
+  ModifiedAt      DateTime? @db.DateTime2
+
+  employee    Employee  @relation("TimeManualEntryEmployee", fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  submittedBy Employee  @relation("TimeManualEntrySubmittedBy", fields: [SubmittedById], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  validatedBy Employee? @relation("TimeManualEntryValidatedBy", fields: [ValidatedById], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  history TimeManualEntryHistory[]
+
+  @@index([EmployeeId, Date])
+  @@index([Status])
+}
+
+/// Journal des changements d'une saisie (soumission, modification, decision).
+model TimeManualEntryHistory {
+  Id        String   @id @default(uuid()) @db.UniqueIdentifier
+  EntryId   String   @db.UniqueIdentifier
+  // Action: CREATE | UPDATE | APPROVE | REJECT
+  Action    String   @db.NVarChar(20)
+  ActorId   String   @db.UniqueIdentifier
+  Comment   String?  @db.NVarChar(500)
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  entry TimeManualEntry @relation(fields: [EntryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([EntryId])
+}
+
+/// Heures travaillees et heures prevues d'un employe pour un jour (resultat
+/// du calcul T4, une ligne par employe et par jour).
+model TimeDailyHours {
+  Id            String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId    String   @db.UniqueIdentifier
+  Date          DateTime @db.Date
+  WorkedHours   Decimal  @db.Decimal(6, 2)
+  RequiredHours Decimal  @db.Decimal(6, 2)
+
+  employee Employee @relation(fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([EmployeeId, Date])
+}
+
+/// Ligne d'heures supplementaires par code de paie (resultat du calcul T5),
+/// source de l'export Sage.
+model TimeOvertime {
+  Id         String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId String   @db.UniqueIdentifier
+  CodeId     String   @db.UniqueIdentifier
+  Date       DateTime @db.Date
+  Hours      Decimal  @db.Decimal(6, 2)
+
+  employee Employee           @relation(fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  code     TimeAttendanceCode @relation(fields: [CodeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([EmployeeId, Date])
+  @@index([CodeId])
+}
+
+/// Correspondance ancien id (base Pointage) -> Id HRM, pour que la migration
+/// soit rejouable sans doublon et que chaque ligne reste tracable.
+model TimeLegacyIdMap {
+  Id          String @id @default(uuid()) @db.UniqueIdentifier
+  SourceTable String @db.NVarChar(60)
+  LegacyId    Int
+  TargetId    String @db.UniqueIdentifier
+
+  @@unique([SourceTable, LegacyId])
 }

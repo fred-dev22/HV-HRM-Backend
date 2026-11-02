@@ -14,6 +14,9 @@ import {
   EXPENSE_TYPE_AUTRE,
   PERMISSIONS,
   ROOT_ORGANIZATION_UNIT,
+  TIME_ATTENDANCE_TYPES,
+  TIME_SETTINGS,
+  TIME_PERMANENCE_RATES,
 } from './seed-data';
 
 const prisma = new PrismaClient({
@@ -44,8 +47,28 @@ async function fixEmployeeUserIdUniqueIndex() {
   console.log('Index Employee.UserId converti en index unique filtré (plusieurs NULL autorisés).');
 }
 
+// Meme piege pour Calendar.EmployeeCategoryId @unique : une seule ligne NULL
+// possible, donc des qu'un calendrier de portee employe (ou un 2e calendrier non
+// rattache a une categorie) existe a cote du calendrier global, l'insertion
+// echoue avec un faux conflit. Index unique filtre a la place.
+async function fixCalendarCategoryUniqueIndex() {
+  const [existing] = await prisma.$queryRawUnsafe<{ has_filter: boolean }[]>(`
+    SELECT i.has_filter
+    FROM sys.indexes i
+    JOIN sys.tables t ON t.object_id = i.object_id
+    WHERE t.name = 'Calendar' AND i.name = 'Calendar_EmployeeCategoryId_key'
+  `);
+  if (!existing || existing.has_filter) return;
+  await prisma.$executeRawUnsafe(`ALTER TABLE Calendar DROP CONSTRAINT Calendar_EmployeeCategoryId_key`);
+  await prisma.$executeRawUnsafe(
+    `CREATE UNIQUE NONCLUSTERED INDEX Calendar_EmployeeCategoryId_key ON Calendar(EmployeeCategoryId) WHERE EmployeeCategoryId IS NOT NULL`,
+  );
+  console.log('Index Calendar.EmployeeCategoryId converti en index unique filtré (plusieurs NULL autorisés).');
+}
+
 async function main() {
   await fixEmployeeUserIdUniqueIndex();
+  await fixCalendarCategoryUniqueIndex();
 
   const existingAdminEmployee = await prisma.employee.findFirst({
     where: { Email: ADMIN_EMAIL },
@@ -73,6 +96,8 @@ async function main() {
     permissionByCode.set(p.Code, created.Id);
   }
   console.log(`Seeded ${PERMISSIONS.length} permissions.`);
+
+  await seedTimeReference();
 
   const existingCategory = await prisma.employeeCategory.findFirst();
   if (existingCategory) {
@@ -203,6 +228,33 @@ async function main() {
   console.log('Seeded first admin account:');
   console.log(`  Email:    ${ADMIN_EMAIL}`);
   console.log(`  Password: ${ADMIN_PASSWORD}`);
+}
+
+// Donnees de reference du module Temps de travail (types et codes de paie,
+// parametres du calcul, tarifs de permanence). Create-only : une valeur
+// deja ajustee par le client n'est jamais ecrasee. Inoffensif si le module
+// est coupe (tables vides et inutilisees).
+async function seedTimeReference() {
+  for (const t of TIME_ATTENDANCE_TYPES) {
+    const type = await prisma.timeAttendanceType.upsert({
+      where: { Name: t.Name },
+      update: {},
+      create: { Name: t.Name, SageTypeCode: t.SageTypeCode },
+    });
+    for (const code of t.Codes) {
+      await prisma.timeAttendanceCode.upsert({
+        where: { Code: code },
+        update: {},
+        create: { Code: code, TypeId: type.Id },
+      });
+    }
+  }
+  for (const s of TIME_SETTINGS) {
+    await prisma.timeSetting.upsert({ where: { Key: s.Key }, update: {}, create: s });
+  }
+  for (const r of TIME_PERMANENCE_RATES) {
+    await prisma.timePermanenceRate.upsert({ where: { DayType: r.DayType }, update: {}, create: r });
+  }
 }
 
 // Type de frais systeme "Autre" (Code AUTRE, IsSystem=true) — secours par

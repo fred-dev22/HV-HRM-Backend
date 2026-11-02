@@ -37,14 +37,28 @@ export class NotificationService {
     return notification;
   }
 
-  // Les plus recentes en premier, limitees a 50 — pas de pagination pour
-  // l'instant, la cloche n'a pas vocation a afficher un historique complet.
-  findMine(employeeId: string) {
+  // Les plus recentes en premier, par pages : `take` (20 par defaut, 50 max) et
+  // `before` (CreatedAt de la derniere notification deja chargee) pour la page
+  // suivante.
+  findMine(employeeId: string, take = 20, before?: string) {
+    const beforeDate = before ? new Date(before) : undefined;
     return this.prisma.notification.findMany({
-      where: { EmployeeId: employeeId },
+      where: {
+        EmployeeId: employeeId,
+        ...(beforeDate && !Number.isNaN(beforeDate.getTime()) ? { CreatedAt: { lt: beforeDate } } : {}),
+      },
       orderBy: { CreatedAt: 'desc' },
-      take: 50,
+      take: Math.min(Math.max(take, 1), 50),
     });
+  }
+
+  // Le badge de la cloche : compte reel en base, independant de ce qui est
+  // charge dans la liste.
+  async unreadCount(employeeId: string) {
+    const count = await this.prisma.notification.count({
+      where: { EmployeeId: employeeId, IsRead: false },
+    });
+    return { count };
   }
 
   async markAsRead(id: string, employeeId: string) {

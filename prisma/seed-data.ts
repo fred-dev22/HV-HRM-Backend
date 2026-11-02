@@ -81,6 +81,15 @@ export const PERMISSIONS: { Code: string; Label: string; Module: string }[] = [
   // ouvre tout le module (catalogue, sessions, inscriptions, evaluations,
   // prestataires, budget).
   { Code: 'FORMATION_ACCES', Label: 'Accéder au module Formation (tout faire)', Module: 'Formation' },
+
+  // Module Temps de travail (pointage, saisies de temps, heures supplementaires).
+  // Meme principe que Recrutement : TEMPS_ACCES ouvre toute l'administration du
+  // module (import pointeuse, reglages, calcul, export Sage). TEMPS_SAISIR est
+  // l'espace employe (mes saisies, ma feuille de temps) ; TEMPS_VALIDER permet
+  // de traiter les saisies de son equipe (circuit de validation du HRM).
+  { Code: 'TEMPS_ACCES', Label: 'Accéder au module Temps de travail (tout faire)', Module: 'Temps de travail' },
+  { Code: 'TEMPS_SAISIR', Label: 'Saisir ses temps (missions, réunions, panier, permanence)', Module: 'Administration' },
+  { Code: 'TEMPS_VALIDER', Label: 'Valider les saisies de temps de son équipe', Module: 'Administration' },
 ];
 
 export const VALIDATEUR_PERMISSIONS = [
@@ -91,6 +100,8 @@ export const VALIDATEUR_PERMISSIONS = [
   // Un manager peut exprimer un besoin en recrutement pour son equipe et
   // suivre ses demandes (espace Administration) — mais pas acceder au module.
   'RECRUTEMENT_BESOIN_VOIR', 'RECRUTEMENT_BESOIN_EXPRIMER',
+  // Saisir ses temps et valider ceux de son equipe (module Temps de travail).
+  'TEMPS_SAISIR', 'TEMPS_VALIDER',
 ];
 
 export const ADMIN_RH_PERMISSIONS = [
@@ -106,6 +117,8 @@ export const ADMIN_RH_PERMISSIONS = [
   'RECRUTEMENT_ACCES',
   // Et la formation (catalogue, sessions, inscriptions, budget).
   'FORMATION_ACCES',
+  // Et le temps de travail (import pointeuse, reglages, calcul, export Sage).
+  'TEMPS_ACCES',
 ];
 
 export const DIRECTEUR_RH_PERMISSIONS = [
@@ -126,7 +139,9 @@ export const DIRECTEUR_RH_PERMISSIONS = [
 // de roles mock cote front (employee/validator/hr_admin/hr_director, voir
 // decision du 29/07).
 export const CATEGORIES: { Code: string; Name: string; Permissions: string[] }[] = [
-  { Code: 'EMPLOYE', Name: 'Employé', Permissions: [] },
+  // Un employe saisit ses temps (module Temps de travail) ; sans effet si le
+  // module est coupe (la permission n'apparait alors pas dans l'ecran des droits).
+  { Code: 'EMPLOYE', Name: 'Employé', Permissions: ['TEMPS_SAISIR'] },
   { Code: 'MANAGER', Name: 'Manager', Permissions: VALIDATEUR_PERMISSIONS },
   { Code: 'ADMIN-RH', Name: 'Admin RH', Permissions: ADMIN_RH_PERMISSIONS },
   { Code: 'DIRECTEUR-RH', Name: 'Directeur RH', Permissions: DIRECTEUR_RH_PERMISSIONS },
@@ -150,3 +165,31 @@ export const EXPENSE_TYPE_AUTRE = {
   Name: 'Autre',
   Unit: 'PerItem',
 };
+
+// Donnees de reference du module Temps de travail, reprises du systeme Pointage
+// (migrations SeedAttendanceCodes, AddSageTypeCodeToAttendanceType,
+// CreatePayrollSettings, CreatePermanenceRates). Rejouees a chaque seed par
+// upsert : on ne ressert jamais une valeur deja modifiee par le client.
+export const TIME_ATTENDANCE_TYPES: { Name: string; SageTypeCode: number; Codes: string[] }[] = [
+  { Name: 'Heures Supplémentaires', SageTypeCode: 255, Codes: ['HS01', 'HS02', 'HS03', 'HS04', 'HS09', 'HS10'] },
+  { Name: 'Panier', SageTypeCode: 0, Codes: ['30900'] },
+  { Name: 'Permanence', SageTypeCode: 3, Codes: ['2210'] },
+];
+
+export const TIME_SETTINGS: { Key: string; Value: number; Label: string }[] = [
+  { Key: 'panier_min_hours', Value: 8, Label: 'Durée continue minimale pour un Panier (heures)' },
+  { Key: 'night_window_start_hour', Value: 22, Label: 'Début de la fenêtre de nuit' },
+  { Key: 'night_window_end_hour', Value: 5, Label: 'Fin de la fenêtre de nuit' },
+  { Key: 'weekly_hs01_threshold_hours', Value: 8, Label: 'Seuil hebdomadaire HS01/HS02' },
+  { Key: 'monthly_ni_cap_hours', Value: 20, Label: 'Plafond mensuel non imposable HS03/HS04' },
+  // Corrections par rapport au systeme Pointage, desactivees tant que le client
+  // ne les a pas validees (elles changent les heures payees). 1 = active.
+  { Key: 'deduct_break', Value: 0, Label: 'Retirer la pause du temps travaillé (1 = oui)' },
+  { Key: 'include_non_working_days', Value: 0, Label: 'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)' },
+];
+
+export const TIME_PERMANENCE_RATES: { DayType: string; Amount: number }[] = [
+  { DayType: 'OUVRABLE', Amount: 5000 },
+  { DayType: 'SAMEDI', Amount: 8000 },
+  { DayType: 'DIMANCHE_FERIE', Amount: 9000 },
+];

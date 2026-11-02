@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TARGET = join(ROOT, 'brand');
-const MODULES = ['missions_expenses', 'recruitment', 'training', 'deadlines', 'payroll', 'reports'];
+const MODULES = ['missions_expenses', 'recruitment', 'training', 'deadlines', 'time', 'payroll', 'reports'];
 
 const argv = process.argv.slice(2);
 const opt = (name) => {

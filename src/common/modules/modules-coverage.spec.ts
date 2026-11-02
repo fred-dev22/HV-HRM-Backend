@@ -21,6 +21,7 @@ const OWNERS: Record<string, ModuleKey> = {
   recruitment: 'recruitment',
   training: 'training',
   reminders: 'deadlines',
+  time: 'time',
 };
 
 function controllerFiles(dir: string): string[] {

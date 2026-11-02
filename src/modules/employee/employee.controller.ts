@@ -6,7 +6,9 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
+import { parseListQuery } from '../../common/utils/list-query.util';
 import { EmployeeService } from './employee.service';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
@@ -49,6 +51,23 @@ export class EmployeeController {
       { DirectValidatorId: dto.DirectValidatorId },
       employeeId,
     );
+  }
+
+  // Liste paginee, filtree et triee cote serveur (ecran Employes).
+  @Get('page')
+  @RequirePermission('EMPLOYE_VOIR_TOUT')
+  findPage(
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('sort') sort?: string,
+    @Query('dir') dir?: string,
+    @Query('status') status?: string,
+    @Query('entity') entity?: string,
+    @Query('category') category?: string,
+    @Query('contract') contract?: string,
+  ) {
+    return this.service.findPage(parseListQuery({ page, pageSize, search, sort, dir }), { status, entity, category, contract });
   }
 
   @Get()

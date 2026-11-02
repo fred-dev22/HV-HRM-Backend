@@ -9,6 +9,7 @@ import { ClientFile, readClientFile } from '../../config/client-file';
 //   recruitment        Recrutement (besoins, offres, candidatures, contrats...)
 //   training           Formation (catalogue, sessions, evaluations, budget...)
 //   deadlines          Rappels d'echeances (ecran RH, carte du tableau de bord, notifications quotidiennes)
+//   time               Temps de travail (pointage biometrique, saisies de temps, heures supplementaires, export Sage)
 //   payroll            Paie (module en construction : ecrans d'attente)
 //   reports            Rapports (module en construction : ecrans d'attente)
 export const SWITCHABLE_MODULES = [
@@ -16,6 +17,7 @@ export const SWITCHABLE_MODULES = [
   'recruitment',
   'training',
   'deadlines',
+  'time',
   'payroll',
   'reports',
 ] as const;
@@ -61,5 +63,6 @@ export function moduleOfPermission(code: string): ModuleKey | null {
   if (code.startsWith('MISSION_') || code.startsWith('FRAIS_') || code === 'CONFIG_FRAIS_MISSION') return 'missions_expenses';
   if (code.startsWith('RECRUTEMENT_')) return 'recruitment';
   if (code.startsWith('FORMATION_')) return 'training';
+  if (code.startsWith('TEMPS_')) return 'time';
   return null;
 }

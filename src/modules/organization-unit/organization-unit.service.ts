@@ -21,12 +21,43 @@ export class OrganizationUnitService {
     return bulkImport(items, CreateOrganizationUnitDto, (dto) => this.create(dto, createdBy));
   }
 
-  findAll() {
-    return this.prisma.organizationUnit.findMany({ where: { IsDeleted: false } });
+  // Effectif et nom du responsable de chaque entite, calcules en base : le
+  // frontend n'a plus besoin de charger tous les employes pour les afficher.
+  // Effectif = employes non supprimes (tous statuts), comme la liste des
+  // employes.
+  private async withHeadcount<T extends { Id: string; ManagerId: string | null }>(units: T[]) {
+    const managerIds = [...new Set(units.map((u) => u.ManagerId).filter((id): id is string => !!id))];
+    const [counts, managers] = await Promise.all([
+      this.prisma.employee.groupBy({
+        by: ['OrganizationUnitId'],
+        where: { IsSystem: false, IsDeleted: false },
+        _count: { _all: true },
+      }),
+      managerIds.length
+        ? this.prisma.employee.findMany({
+            where: { Id: { in: managerIds }, IsSystem: false, IsDeleted: false },
+            select: { Id: true, FullName: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const countOf = new Map<string, number>(counts.map((c) => [c.OrganizationUnitId, c._count._all] as [string, number]));
+    const nameOf = new Map<string, string>(managers.map((m) => [m.Id, m.FullName] as [string, string]));
+    return units.map((u) => ({
+      ...u,
+      EmployeeCount: countOf.get(u.Id) ?? 0,
+      ManagerFullName: u.ManagerId ? (nameOf.get(u.ManagerId) ?? null) : null,
+    }));
+  }
+
+  async findAll() {
+    const units = await this.prisma.organizationUnit.findMany({ where: { IsDeleted: false } });
+    return this.withHeadcount(units);
   }
 
   async findTree() {
-    const units = await this.prisma.organizationUnit.findMany({ where: { IsDeleted: false } });
+    const units = await this.withHeadcount(
+      await this.prisma.organizationUnit.findMany({ where: { IsDeleted: false } }),
+    );
     const byParent = new Map<string | null, typeof units>();
     for (const unit of units) {
       const key = unit.ParentId;

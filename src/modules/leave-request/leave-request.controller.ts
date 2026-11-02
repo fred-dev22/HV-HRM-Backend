@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { LeaveRequestService } from './leave-request.service';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
@@ -6,6 +6,7 @@ import { DecideLeaveRequestDto } from './dto/decide-leave-request.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 import { CurrentPermissions } from '../../common/decorators/current-permissions.decorator';
+import { parseListQuery } from '../../common/utils/list-query.util';
 
 @Controller('leave-requests')
 export class LeaveRequestController {
@@ -24,8 +25,12 @@ export class LeaveRequestController {
 
   // Doit rester avant ':id' — sinon Nest matcherait ces segments comme des id.
   @Get('mine')
-  findMine(@CurrentUser('employeeId') employeeId: string) {
-    return this.service.findMine(employeeId);
+  findMine(
+    @CurrentUser('employeeId') employeeId: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.service.findMine(employeeId, from && to ? { from, to } : undefined);
   }
 
   @Get('team')
@@ -46,10 +51,48 @@ export class LeaveRequestController {
     return this.service.findValidatedByMe(employeeId);
   }
 
+  // Liste paginee, filtree et triee cote serveur. La portee est choisie par
+  // l'appelant mais verifiee ici : all/team exigent la permission.
+  @Get('page')
+  findPage(
+    @CurrentUser('employeeId') employeeId: string,
+    @CurrentPermissions() permissions: Set<string>,
+    @Query('scope') scope = 'mine',
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('sort') sort?: string,
+    @Query('dir') dir?: string,
+    @Query('status') status?: string,
+    @Query('type') type?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    if (scope === 'all' && !permissions.has('CONGE_VOIR_TOUT')) {
+      throw new ForbiddenException("Vous n'avez pas la permission requise (CONGE_VOIR_TOUT) pour effectuer cette action");
+    }
+    if (scope === 'team' && !permissions.has('CONGE_VOIR_EQUIPE')) {
+      throw new ForbiddenException("Vous n'avez pas la permission requise (CONGE_VOIR_EQUIPE) pour effectuer cette action");
+    }
+    const safeScope = scope === 'all' || scope === 'team' ? scope : 'mine';
+    return this.service.findPage(
+      safeScope,
+      employeeId,
+      parseListQuery({ page, pageSize, search, sort, dir }),
+      { status, type, from, to },
+    );
+  }
+
+  @Get('recently-approved')
+  @RequirePermission('CONGE_VOIR_TOUT')
+  findRecentlyApproved(@Query('limit') limit?: string) {
+    return this.service.findRecentlyApproved(limit ? Number(limit) || 10 : 10);
+  }
+
   @Get()
   @RequirePermission('CONGE_VOIR_TOUT')
-  findAll() {
-    return this.service.findAll();
+  findAll(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.service.findAll(from && to ? { from, to } : undefined);
   }
 
   @Get(':id')

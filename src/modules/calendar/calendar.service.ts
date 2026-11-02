@@ -43,8 +43,31 @@ export class CalendarService {
     }
   }
 
+  // Un calendrier a une seule portee : global (defaut), categorie ou employe.
+  private validateScope(dto: { IsDefault?: boolean; EmployeeCategoryId?: string | null; EmployeeId?: string | null }) {
+    const scopes = [dto.IsDefault ? 'defaut' : null, dto.EmployeeCategoryId, dto.EmployeeId].filter(Boolean);
+    if (scopes.length > 1) {
+      throw new BadRequestException(
+        'Un calendrier est soit le calendrier par défaut, soit celui d\'une catégorie, soit celui d\'un employé',
+      );
+    }
+  }
+
+  // Un employe n'a jamais plus d'un calendrier dedie (pas de contrainte SQL,
+  // voir schema.prisma).
+  private async assertEmployeeFree(employeeId: string | null | undefined, exceptCalendarId?: string) {
+    if (!employeeId) return;
+    const taken = await this.prisma.calendar.findFirst({
+      where: { EmployeeId: employeeId, ...(exceptCalendarId ? { Id: { not: exceptCalendarId } } : {}) },
+      select: { Id: true },
+    });
+    if (taken) throw new BadRequestException('Cet employé a déjà un calendrier dédié');
+  }
+
   async create(dto: CreateCalendarDto, createdBy: string) {
     this.validateWorkDays(dto.WorkDays);
+    this.validateScope(dto);
+    await this.assertEmployeeFree(dto.EmployeeId);
     return this.prisma.$transaction(async (tx) => {
       // Un seul calendrier par defaut a la fois — sans ca, en creer un second
       // avec IsDefault:true laisserait deux lignes a true en base et
@@ -57,6 +80,7 @@ export class CalendarService {
           Name: dto.Name,
           IsDefault: dto.IsDefault ?? false,
           EmployeeCategoryId: dto.EmployeeCategoryId,
+          EmployeeId: dto.EmployeeId,
           CreatedBy: createdBy,
           workDays: { create: dto.WorkDays },
         },
@@ -89,10 +113,19 @@ export class CalendarService {
     });
   }
 
-  // Calendrier applicable a un employe : celui de sa categorie s'il en a un
-  // de dedie, sinon le calendrier global par defaut (decision du 04/08 —
-  // calendrier par categorie uniquement, pas de surcharge par employe).
+  findByEmployee(employeeId: string) {
+    return this.prisma.calendar.findFirst({
+      where: { EmployeeId: employeeId },
+      include: WORK_DAYS_INCLUDE,
+    });
+  }
+
+  // Calendrier applicable a un employe : le sien s'il en a un (module Temps de
+  // travail), sinon celui de sa categorie, sinon le calendrier global par
+  // defaut. Les conges (LeaveRequestService) restent sur categorie > global.
   async resolveForEmployee(employeeId: string) {
+    const own = await this.findByEmployee(employeeId);
+    if (own) return own;
     const employee = await this.prisma.employee.findUnique({
       where: { Id: employeeId },
       select: { EmployeeCategoryId: true },
@@ -116,8 +149,15 @@ export class CalendarService {
   }
 
   async update(id: string, dto: UpdateCalendarDto, modifiedBy: string) {
-    await this.findOne(id);
+    const existing = await this.findOne(id);
     this.validateWorkDays(dto.WorkDays);
+    // Portee finale apres modification (un champ absent garde sa valeur actuelle).
+    this.validateScope({
+      IsDefault: dto.IsDefault ?? existing.IsDefault,
+      EmployeeCategoryId: dto.EmployeeCategoryId !== undefined ? dto.EmployeeCategoryId : existing.EmployeeCategoryId,
+      EmployeeId: dto.EmployeeId !== undefined ? dto.EmployeeId : existing.EmployeeId,
+    });
+    await this.assertEmployeeFree(dto.EmployeeId, id);
     return this.prisma.$transaction(async (tx) => {
       if (dto.IsDefault) {
         await tx.calendar.updateMany({
@@ -131,6 +171,7 @@ export class CalendarService {
           Name: dto.Name,
           IsDefault: dto.IsDefault,
           EmployeeCategoryId: dto.EmployeeCategoryId,
+          EmployeeId: dto.EmployeeId,
           ModifiedBy: modifiedBy,
           ModifiedAt: new Date(),
         },
