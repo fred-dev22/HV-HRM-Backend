@@ -332,7 +332,23 @@ export class LeaveTransactionService {
   // generation complete de l'entreprise a eu lieu ce mois-ci" et ne doit pas
   // etre modifie par un credit partiel, sous peine de faire croire au cron
   // (ou au bouton "Générer maintenant") qu'un cycle complet a deja tourne.
-  async generateAccruals(
+  //
+  // Les generations sont executees une a la fois dans le processus : sans cela,
+  // le cron et le bouton "Générer maintenant" lances au meme instant passeraient
+  // tous deux le controle "deja credite ce mois-ci" avant que l'un des deux
+  // n'ait ecrit, et crediteraient deux fois.
+  private accrualQueue: Promise<unknown> = Promise.resolve();
+
+  generateAccruals(
+    triggeredBy: string,
+    opts?: { employeeId?: string; leaveTypeId?: string },
+  ) {
+    const run = this.accrualQueue.then(() => this.generateAccrualsNow(triggeredBy, opts));
+    this.accrualQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async generateAccrualsNow(
     triggeredBy: string,
     opts?: { employeeId?: string; leaveTypeId?: string },
   ) {
