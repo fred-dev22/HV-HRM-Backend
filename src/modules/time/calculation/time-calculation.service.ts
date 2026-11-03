@@ -479,6 +479,101 @@ export class TimeCalculationService {
   }
 
   // Feuille de temps d'un employe : une ligne par jour de la periode.
+  // Employes de l'equipe d'un validateur : ceux dont il est le validateur direct
+  // et ceux des entites qu'il dirige.
+  async teamEmployeeIds(managerId: string): Promise<string[]> {
+    const rows = await this.prisma.employee.findMany({
+      where: {
+        IsDeleted: false,
+        IsSystem: false,
+        Id: { not: managerId },
+        OR: [{ DirectValidatorId: managerId }, { organizationUnit: { ManagerId: managerId } }],
+      },
+      select: { Id: true },
+    });
+    return rows.map((r) => r.Id);
+  }
+
+  // Synthese par employe sur une periode (heures prevues, travaillees, heures
+  // supplementaires, absences, heures payees par code). employeeIds = null pour
+  // tous les employes actifs. Lignes de calcul etroites : leur nombre est borne
+  // par l'effectif x la periode, pas par l'historique.
+  async timesheetSummary(
+    from: string,
+    to: string,
+    employeeIds: string[] | null,
+    opts: { search?: string; page?: number; pageSize?: number },
+  ) {
+    assertRange(from, to);
+    const search = opts.search?.trim();
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        IsDeleted: false,
+        IsSystem: false,
+        Status: { in: ['Active', 'OnTrial'] },
+        ...(employeeIds ? { Id: { in: employeeIds } } : {}),
+        ...(search ? { OR: [{ FullName: { contains: search } }, { EmployeeNumber: { contains: search } }] } : {}),
+      },
+      select: { Id: true, FullName: true, EmployeeNumber: true },
+      orderBy: [{ FullName: 'asc' }, { Id: 'asc' }],
+    });
+    const wanted = new Set(employees.map((e) => e.Id));
+    const [days, overtime] = await Promise.all([
+      this.prisma.timeDailyHours.findMany({
+        where: { Date: { gte: toDate(from), lte: toDate(to) } },
+        select: { EmployeeId: true, WorkedHours: true, RequiredHours: true },
+      }),
+      this.prisma.timeOvertime.findMany({
+        where: { Date: { gte: toDate(from), lte: toDate(to) } },
+        select: { EmployeeId: true, Hours: true },
+      }),
+    ]);
+    const acc = new Map<string, { required: number; worked: number; overtime: number; absence: number; paidOvertime: number }>();
+    const row = (id: string) => {
+      let r = acc.get(id);
+      if (!r) acc.set(id, (r = { required: 0, worked: 0, overtime: 0, absence: 0, paidOvertime: 0 }));
+      return r;
+    };
+    for (const d of days) {
+      if (!wanted.has(d.EmployeeId)) continue;
+      const required = Number(d.RequiredHours);
+      const worked = Number(d.WorkedHours);
+      const r = row(d.EmployeeId);
+      r.required += required;
+      r.worked += worked;
+      r.overtime += Math.max(0, worked - required);
+      r.absence += Math.max(0, required - worked);
+    }
+    for (const o of overtime) {
+      if (wanted.has(o.EmployeeId)) row(o.EmployeeId).paidOvertime += Number(o.Hours);
+    }
+    const items = employees.map((e) => {
+      const r = acc.get(e.Id) ?? { required: 0, worked: 0, overtime: 0, absence: 0, paidOvertime: 0 };
+      return {
+        employeeId: e.Id,
+        employeeNumber: e.EmployeeNumber,
+        name: e.FullName,
+        required: round2(r.required),
+        worked: round2(r.worked),
+        overtime: round2(r.overtime),
+        absence: round2(r.absence),
+        paidOvertime: round2(r.paidOvertime),
+        presenceRate: r.required > 0 ? round2(Math.min(100, (r.worked / r.required) * 100)) : null,
+      };
+    });
+    const total = (f: (r: (typeof items)[number]) => number) => round2(items.reduce((s, r) => s + f(r), 0));
+    const page = Math.max(1, opts.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? 20));
+    return {
+      items: items.slice((page - 1) * pageSize, page * pageSize),
+      total: items.length,
+      meta: {
+        period: { from, to },
+        totals: { required: total((r) => r.required), worked: total((r) => r.worked), overtime: total((r) => r.overtime), absence: total((r) => r.absence), paidOvertime: total((r) => r.paidOvertime) },
+      },
+    };
+  }
+
   async timesheet(employeeId: string, from: string, to: string) {
     assertRange(from, to);
     const employee = await this.prisma.employee.findUnique({

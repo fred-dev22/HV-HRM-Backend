@@ -17,6 +17,26 @@ const toDate = (key: string) => new Date(`${key.slice(0, 10)}T00:00:00Z`);
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const keyOf = (d: Date) => d.toISOString().slice(0, 10);
 
+// Duree et horodatages d'une saisie. Avec heure de debut et de fin, la duree
+// s'en deduit ; sinon la duree declaree est obligatoire. Les horodatages sont
+// l'heure murale du serveur, comme les pointages importes.
+export function resolveTimes(dateKey: string, hours: number | undefined, start?: string, end?: string) {
+  if (!start && !end) {
+    if (!hours) throw new BadRequestException("Indiquez la durée, ou l'heure de début et l'heure de fin");
+    return { hours, clockIn: null as Date | null, clockOut: null as Date | null };
+  }
+  if (!start || !end) throw new BadRequestException("Renseignez l'heure de début ET l'heure de fin");
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
+  const minutes = eh! * 60 + em! - (sh! * 60 + sm!);
+  if (minutes <= 0) throw new BadRequestException("L'heure de fin doit être après l'heure de début");
+  return {
+    hours: Math.round((minutes / 60) * 100) / 100,
+    clockIn: new Date(`${dateKey}T${start}:00`),
+    clockOut: new Date(`${dateKey}T${end}:00`),
+  };
+}
+
 // Saisies de temps (mission, reunion, panier, permanence...) et leur validation
 // par le circuit du HRM : validateur direct de l'employe s'il en a un, sinon
 // pool d'approbation de type 'TimeEntry' de son entite (ou d'une entite
@@ -180,6 +200,7 @@ export class TimeEntryService {
 
     this.assertWindow(dto.Date.slice(0, 10), isHr);
     await this.assertNoDuplicate(employeeId, dto.Date.slice(0, 10), dto.EntryType);
+    const times = resolveTimes(dto.Date.slice(0, 10), dto.Hours, dto.StartTime, dto.EndTime);
 
     const entry = await this.prisma.$transaction(async (tx) => {
       const created = await tx.timeManualEntry.create({
@@ -187,7 +208,9 @@ export class TimeEntryService {
           EmployeeId: employeeId,
           SubmittedById: actorId,
           Date: toDate(dto.Date),
-          Hours: dto.Hours,
+          Hours: times.hours,
+          FirstClockIn: times.clockIn,
+          LastClockOut: times.clockOut,
           EntryType: dto.EntryType,
           Comments: dto.Comments,
           Status: 'Pending',
@@ -231,6 +254,10 @@ export class TimeEntryService {
     this.assertWindow(keyOf(existing.Date), isHr);
     this.assertWindow(newDate, isHr);
     await this.assertNoDuplicate(existing.EmployeeId, newDate, newType, id);
+    // Horaires : s'ils sont modifies, la duree est recalculee ; si seule la duree
+    // change, les anciens horaires ne correspondent plus et sont retires.
+    const touchesTimes = dto.StartTime !== undefined || dto.EndTime !== undefined || dto.Hours !== undefined;
+    const times = touchesTimes ? resolveTimes(newDate, dto.Hours, dto.StartTime, dto.EndTime) : null;
 
     await this.prisma.$transaction(async (tx) => {
       await tx.approvalDecision.updateMany({
@@ -241,7 +268,7 @@ export class TimeEntryService {
         where: { Id: id },
         data: {
           Date: dto.Date ? toDate(dto.Date) : undefined,
-          Hours: dto.Hours,
+          ...(times ? { Hours: times.hours, FirstClockIn: times.clockIn, LastClockOut: times.clockOut } : {}),
           EntryType: dto.EntryType,
           Comments: dto.Comments,
           ModifiedAt: new Date(),
@@ -368,6 +395,15 @@ export class TimeEntryService {
       ...(q.EmployeeId ? { EmployeeId: q.EmployeeId } : {}),
       ...(q.Status ? { Status: q.Status } : {}),
       ...(q.EntryType ? { EntryType: q.EntryType } : {}),
+      ...(q.Search?.trim()
+        ? {
+            OR: [
+              { employee: { FullName: { contains: q.Search.trim() } } },
+              { employee: { EmployeeNumber: { contains: q.Search.trim() } } },
+              { Comments: { contains: q.Search.trim() } },
+            ],
+          }
+        : {}),
       ...(q.From || q.To ? { Date: { ...(q.From ? { gte: toDate(q.From) } : {}), ...(q.To ? { lte: toDate(q.To) } : {}) } } : {}),
     };
   }
@@ -375,11 +411,13 @@ export class TimeEntryService {
   private async page(where: Prisma.TimeManualEntryWhereInput, q: QueryTimeEntriesDto) {
     const page = q.Page ?? 1;
     const limit = q.Limit ?? 50;
-    const [data, total] = await Promise.all([
+    const [data, total, sum] = await Promise.all([
       this.prisma.timeManualEntry.findMany({ where, include: INCLUDE, orderBy: [{ Date: 'desc' }, { CreatedAt: 'desc' }], skip: (page - 1) * limit, take: limit }),
       this.prisma.timeManualEntry.count({ where }),
+      this.prisma.timeManualEntry.aggregate({ where, _sum: { Hours: true } }),
     ]);
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    // `hours` : total des heures de TOUTES les saisies du filtre (pas seulement la page).
+    return { data, total, hours: Math.round(Number(sum._sum.Hours ?? 0) * 100) / 100, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   findMine(employeeId: string, q: QueryTimeEntriesDto) {
@@ -398,6 +436,40 @@ export class TimeEntryService {
       select: { EntityId: true },
     });
     return this.page(this.buildWhere({ ...q, Status: 'Pending' }, { Id: { in: decisions.map((d) => d.EntityId) } }), q);
+  }
+
+  // Compteurs du bandeau "Resume" de l'ecran Saisies : calcules en base sur toutes
+  // les saisies du perimetre (toutes pour le RH, les miennes sinon) et les
+  // memes filtres que la liste, hors statut.
+  async summary(me: string, permissions: Set<string>, q: QueryTimeEntriesDto) {
+    const base: Prisma.TimeManualEntryWhereInput = permissions.has('TEMPS_ACCES') ? {} : { EmployeeId: me };
+    const where = this.buildWhere({ ...q, Status: undefined, ...(permissions.has('TEMPS_ACCES') ? {} : { EmployeeId: undefined }) }, base);
+    const groups = await this.prisma.timeManualEntry.groupBy({ by: ['Status'], where, _count: { _all: true }, _sum: { Hours: true } });
+    const count = (st: string) => groups.find((g) => g.Status === st)?._count._all ?? 0;
+    const hours = (st: string) => Number(groups.find((g) => g.Status === st)?._sum.Hours ?? 0);
+    return {
+      total: groups.reduce((n, g) => n + g._count._all, 0),
+      pending: count('Pending'),
+      approved: count('Approved'),
+      rejected: count('Rejected'),
+      cancelled: count('Cancelled'),
+      // Heures a prendre en compte : en attente ou approuvees.
+      hours: Math.round((hours('Pending') + hours('Approved')) * 100) / 100,
+    };
+  }
+
+  // Saisies que j'ai deja traitees (approuvees ou refusees par moi) ; le RH voit
+  // toutes les saisies deja decidees. Alimente l'onglet "Traitees" de la validation.
+  async findProcessed(approverId: string, permissions: Set<string>, q: QueryTimeEntriesDto) {
+    if (permissions.has('TEMPS_ACCES')) {
+      return this.page(this.buildWhere({ ...q, Status: undefined }, { Status: { in: ['Approved', 'Rejected'] } }), q);
+    }
+    const acts = await this.prisma.timeManualEntryHistory.findMany({
+      where: { ActorId: approverId, Action: { in: ['APPROVE', 'REJECT'] } },
+      select: { EntryId: true },
+    });
+    const ids = [...new Set(acts.map((a) => a.EntryId))];
+    return this.page(this.buildWhere({ ...q, Status: undefined }, { Id: { in: ids } }), q);
   }
 
   async history(id: string, actorId: string, permissions: Set<string>) {

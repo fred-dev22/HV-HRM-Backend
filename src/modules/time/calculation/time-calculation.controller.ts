@@ -6,7 +6,7 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 import { CurrentPermissions } from '../../../common/decorators/current-permissions.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { TimeCalculationService } from './time-calculation.service';
-import { CalculateDailyHoursDto, CalculateOvertimeDto, PeriodDto, TimesheetQueryDto } from './time-calculation.dto';
+import { CalculateDailyHoursDto, CalculateOvertimeDto, PeriodDto, TimesheetListQueryDto, TimesheetQueryDto } from './time-calculation.dto';
 
 @RequireModule('time')
 @Controller('time')
@@ -55,17 +55,41 @@ export class TimeCalculationController {
     res.end();
   }
 
-  // Feuille de temps : la sienne avec TEMPS_SAISIR, celle d'un autre avec TEMPS_ACCES.
+  // Feuille de temps : la sienne avec TEMPS_SAISIR, celle d'un membre de son
+  // equipe avec TEMPS_VALIDER, celle de n'importe qui avec TEMPS_ACCES.
   @Get('timesheet')
-  timesheet(
+  async timesheet(
     @Query() q: TimesheetQueryDto,
     @CurrentUser('employeeId') me: string,
     @CurrentPermissions() permissions: Set<string>,
   ) {
     const target = q.EmployeeId ?? me;
     const admin = permissions.has('TEMPS_ACCES');
-    if (target !== me && !admin) throw new ForbiddenException();
+    if (target !== me && !admin) {
+      if (!permissions.has('TEMPS_VALIDER') || !(await this.service.teamEmployeeIds(me)).includes(target)) throw new ForbiddenException();
+    }
     if (target === me && !admin && !permissions.has('TEMPS_SAISIR')) throw new ForbiddenException();
     return this.service.timesheet(target, q.From, q.To);
+  }
+
+  // Synthese de tous les employes (rapport global).
+  @Get('timesheet/global')
+  @RequirePermission('TEMPS_ACCES')
+  timesheetGlobal(@Query() q: TimesheetListQueryDto) {
+    return this.service.timesheetSummary(q.From, q.To, null, { search: q.Search, page: q.Page, pageSize: q.PageSize });
+  }
+
+  // Synthese de l'equipe (lecture seule) : tous les employes pour le RH, sinon
+  // les membres de l'equipe du validateur.
+  @Get('timesheet/team')
+  async timesheetTeam(
+    @Query() q: TimesheetListQueryDto,
+    @CurrentUser('employeeId') me: string,
+    @CurrentPermissions() permissions: Set<string>,
+  ) {
+    const admin = permissions.has('TEMPS_ACCES');
+    if (!admin && !permissions.has('TEMPS_VALIDER')) throw new ForbiddenException();
+    const ids = admin ? null : await this.service.teamEmployeeIds(me);
+    return this.service.timesheetSummary(q.From, q.To, ids, { search: q.Search, page: q.Page, pageSize: q.PageSize });
   }
 }

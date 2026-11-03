@@ -1,4 +1,5 @@
-import { IsBoolean, IsDateString, IsIn, IsOptional, IsUUID } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
 export class PeriodDto {
   @IsDateString()
@@ -30,4 +31,26 @@ export class TimesheetQueryDto extends PeriodDto {
   @IsOptional()
   @IsUUID()
   EmployeeId?: string;
+}
+
+// Feuilles de temps de plusieurs employes (globale ou equipe) : recherche et
+// pagination faites par le serveur.
+export class TimesheetListQueryDto extends PeriodDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  Search?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  Page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  PageSize?: number;
 }

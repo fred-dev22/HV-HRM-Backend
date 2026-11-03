@@ -36,6 +36,18 @@ export class TimeEntryController {
     return this.service.findPendingForMe(me, permissions, q);
   }
 
+  @Get('summary')
+  summary(@Query() q: QueryTimeEntriesDto, @CurrentUser('employeeId') me: string, @CurrentPermissions() permissions: Set<string>) {
+    requireAny(permissions, 'TEMPS_SAISIR', 'TEMPS_ACCES');
+    return this.service.summary(me, permissions, q);
+  }
+
+  @Get('processed')
+  processed(@Query() q: QueryTimeEntriesDto, @CurrentUser('employeeId') me: string, @CurrentPermissions() permissions: Set<string>) {
+    requireAny(permissions, 'TEMPS_VALIDER', 'TEMPS_ACCES');
+    return this.service.findProcessed(me, permissions, q);
+  }
+
   @Get()
   @RequirePermission('TEMPS_ACCES')
   findAll(@Query() q: QueryTimeEntriesDto) {

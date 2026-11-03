@@ -170,9 +170,14 @@ export const EXPENSE_TYPE_AUTRE = {
 // (migrations SeedAttendanceCodes, AddSageTypeCodeToAttendanceType,
 // CreatePayrollSettings, CreatePermanenceRates). Rejouees a chaque seed par
 // upsert : on ne ressert jamais une valeur deja modifiee par le client.
-export const TIME_ATTENDANCE_TYPES: { Name: string; SageTypeCode: number; Codes: string[] }[] = [
-  { Name: 'Heures Supplémentaires', SageTypeCode: 255, Codes: ['HS01', 'HS02', 'HS03', 'HS04', 'HS09', 'HS10'] },
-  { Name: 'Panier', SageTypeCode: 0, Codes: ['30900'] },
+export const TIME_ATTENDANCE_TYPES: { Name: string; Description?: string; SageTypeCode: number; Codes: string[] }[] = [
+  {
+    Name: 'Heures Supplémentaires',
+    Description: "Il s'agit des heures travaillées en dehors des 40 heures hebdomadaires prévues",
+    SageTypeCode: 255,
+    Codes: ['HS01', 'HS02', 'HS03', 'HS04', 'HS09', 'HS10'],
+  },
+  { Name: 'Panier', Description: '8 heures de travail continu sur une journée constituent un panier', SageTypeCode: 0, Codes: ['30900'] },
   { Name: 'Permanence', SageTypeCode: 3, Codes: ['2210'] },
 ];
 

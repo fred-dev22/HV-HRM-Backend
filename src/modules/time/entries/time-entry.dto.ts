@@ -7,10 +7,13 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   MaxLength,
   Min,
 } from 'class-validator';
+
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const TIME_ENTRY_TYPES = [
   'mission',
@@ -30,11 +33,22 @@ export class CreateTimeEntryDto {
   @IsDateString()
   Date!: string;
 
-  // Heures declarees (un panier ou une permanence compte 1 par jour).
+  // Heures declarees (un panier ou une permanence compte 1 par jour). Facultatif
+  // si l'heure de debut et de fin sont donnees : la duree s'en deduit.
+  @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.01)
   @Max(24)
-  Hours!: number;
+  Hours?: number;
+
+  // Heure de debut et de fin de la journee declaree (HH:mm).
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de début au format HH:mm' })
+  StartTime?: string;
+
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de fin au format HH:mm' })
+  EndTime?: string;
 
   @IsIn(TIME_ENTRY_TYPES)
   EntryType!: (typeof TIME_ENTRY_TYPES)[number];
@@ -57,6 +71,14 @@ export class UpdateTimeEntryDto {
   Hours?: number;
 
   @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de début au format HH:mm' })
+  StartTime?: string;
+
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de fin au format HH:mm' })
+  EndTime?: string;
+
+  @IsOptional()
   @IsIn(TIME_ENTRY_TYPES)
   EntryType?: (typeof TIME_ENTRY_TYPES)[number];
 
@@ -77,6 +99,12 @@ export class QueryTimeEntriesDto {
   @IsOptional()
   @IsUUID()
   EmployeeId?: string;
+
+  // Recherche libre : nom ou matricule de l'employe, commentaire.
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  Search?: string;
 
   @IsOptional()
   @IsIn(['Pending', 'Approved', 'Rejected', 'Cancelled'])

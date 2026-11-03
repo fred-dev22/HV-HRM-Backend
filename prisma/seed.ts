@@ -239,7 +239,7 @@ async function seedTimeReference() {
     const type = await prisma.timeAttendanceType.upsert({
       where: { Name: t.Name },
       update: {},
-      create: { Name: t.Name, SageTypeCode: t.SageTypeCode },
+      create: { Name: t.Name, Description: t.Description, SageTypeCode: t.SageTypeCode },
     });
     for (const code of t.Codes) {
       await prisma.timeAttendanceCode.upsert({
