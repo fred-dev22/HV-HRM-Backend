@@ -54,8 +54,8 @@ describe('CalendarService.importSchedule', () => {
         findUniqueOrThrow: jest.fn(),
       },
       calendarWorkDay: { deleteMany: jest.fn(), createMany: jest.fn() },
-      employeeCategory: { findFirst: jest.fn().mockResolvedValue({ Name: 'Production' }) },
-      employee: { findFirst: jest.fn().mockResolvedValue({ FullName: 'Alice Rakoto' }) },
+      employeeCategory: { findFirst: jest.fn(async ({ where }: { where: { Code: string } }) => (where.Code === 'PROD' ? { Id: '11111111-1111-1111-1111-111111111111', Name: 'Production' } : null)) },
+      employee: { findFirst: jest.fn(async ({ where }: { where: { EmployeeNumber: string } }) => (where.EmployeeNumber === 'EMP001' ? { Id: '22222222-2222-2222-2222-222222222222', FullName: 'Alice Rakoto' } : null)) },
       $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
     };
     return { service: new CalendarService(prisma as never), prisma, created };
@@ -64,7 +64,7 @@ describe('CalendarService.importSchedule', () => {
 
   it('cree le calendrier de la categorie s\'il n\'existe pas', async () => {
     const { service, created } = build();
-    await service.importSchedule({ Scope: 'category', TargetId: '11111111-1111-1111-1111-111111111111', ...change }, 'actor');
+    await service.importSchedule({ Scope: 'category', TargetCode: 'PROD', ...change }, 'actor');
     const data = created.mock.calls[0]![0].data as unknown as { Name: string; EmployeeCategoryId: string };
     expect(data.Name).toBe('Horaires Production');
     expect(data.EmployeeCategoryId).toBe('11111111-1111-1111-1111-111111111111');
@@ -75,7 +75,7 @@ describe('CalendarService.importSchedule', () => {
     const { service, prisma } = build({ category: existing });
     prisma.calendar.findUniqueOrThrow.mockResolvedValue({});
     (prisma as unknown as { calendar: { findUnique: jest.Mock } }).calendar.findUnique = jest.fn().mockResolvedValue(existing);
-    await service.importSchedule({ Scope: 'category', TargetId: '11111111-1111-1111-1111-111111111111', ...change }, 'actor');
+    await service.importSchedule({ Scope: 'category', TargetCode: 'PROD', ...change }, 'actor');
     expect(prisma.calendarWorkDay.deleteMany).toHaveBeenCalled();
     expect(prisma.calendarWorkDay.createMany.mock.calls[0]![0].data).toHaveLength(7);
   });
@@ -84,5 +84,13 @@ describe('CalendarService.importSchedule', () => {
     const { service } = build();
     await expect(service.importSchedule({ Scope: 'global', ...change }, 'a')).rejects.toBeInstanceOf(BadRequestException);
     await expect(service.importSchedule({ Scope: 'employee', ...change }, 'a')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("retrouve la categorie par son code et l'employe par son matricule, et nomme la valeur introuvable", async () => {
+    const { service, created } = build();
+    await service.importSchedule({ Scope: 'employee', TargetCode: 'EMP001', ...change }, 'actor');
+    expect((created.mock.calls[0]![0].data as unknown as { EmployeeId: string }).EmployeeId).toBe('22222222-2222-2222-2222-222222222222');
+    await expect(service.importSchedule({ Scope: 'category', TargetCode: 'Production', ...change }, 'a')).rejects.toThrow('code « Production »');
+    await expect(service.importSchedule({ Scope: 'employee', TargetCode: 'Alice Rakoto', ...change }, 'a')).rejects.toThrow('matricule « Alice Rakoto »');
   });
 });

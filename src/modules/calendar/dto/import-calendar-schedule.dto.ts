@@ -1,4 +1,4 @@
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsOptional, IsUUID, Matches } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { WEEK_DAYS } from '../calendar-schedule-import';
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -10,10 +10,12 @@ export class ImportCalendarScheduleDto {
   @IsIn(['global', 'category', 'employee'])
   Scope!: 'global' | 'category' | 'employee';
 
-  // Obligatoire pour une categorie ou un employe.
+  // Obligatoire pour une categorie (son code) ou un employe (son matricule). Le code et
+  // le matricule sont uniques en base : jamais deux cibles pour une meme valeur.
   @IsOptional()
-  @IsUUID()
-  TargetId?: string;
+  @IsString()
+  @MaxLength(20)
+  TargetCode?: string;
 
   @IsArray()
   @ArrayMinSize(1)

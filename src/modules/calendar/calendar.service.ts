@@ -198,21 +198,25 @@ export class CalendarService {
   async importSchedule(dto: ImportCalendarScheduleDto, actorId: string) {
     let calendar: Awaited<ReturnType<CalendarService['findOne']>> | null = null;
     let label = '';
+    let targetId: string | undefined;
     if (dto.Scope === 'global') {
       calendar = await this.prisma.calendar.findFirst({ where: { IsDefault: true }, include: WORK_DAYS_INCLUDE });
       if (!calendar) throw new BadRequestException("Aucun calendrier par défaut n'est configuré");
     } else {
-      if (!dto.TargetId) throw new BadRequestException(dto.Scope === 'category' ? 'Catégorie requise' : 'Employé requis');
+      const code = dto.TargetCode?.trim();
+      if (!code) throw new BadRequestException(dto.Scope === 'category' ? 'Indiquez le code de la catégorie' : "Indiquez le matricule de l'employé");
       if (dto.Scope === 'category') {
-        const category = await this.prisma.employeeCategory.findFirst({ where: { Id: dto.TargetId }, select: { Name: true } });
-        if (!category) throw new NotFoundException('Catégorie introuvable');
+        const category = await this.prisma.employeeCategory.findFirst({ where: { Code: code }, select: { Id: true, Name: true } });
+        if (!category) throw new NotFoundException(`Aucune catégorie avec le code « ${code} »`);
+        targetId = category.Id;
         label = category.Name;
-        calendar = await this.findByCategory(dto.TargetId);
+        calendar = await this.findByCategory(category.Id);
       } else {
-        const employee = await this.prisma.employee.findFirst({ where: { Id: dto.TargetId, IsDeleted: false }, select: { FullName: true } });
-        if (!employee) throw new NotFoundException('Employé introuvable');
+        const employee = await this.prisma.employee.findFirst({ where: { EmployeeNumber: code, IsDeleted: false }, select: { Id: true, FullName: true } });
+        if (!employee) throw new NotFoundException(`Aucun employé avec le matricule « ${code} »`);
+        targetId = employee.Id;
         label = employee.FullName;
-        calendar = await this.findByEmployee(dto.TargetId);
+        calendar = await this.findByEmployee(employee.Id);
       }
     }
 
@@ -223,8 +227,8 @@ export class CalendarService {
     return this.create(
       {
         Name: `Horaires ${label}`.slice(0, 100),
-        EmployeeCategoryId: dto.Scope === 'category' ? dto.TargetId : undefined,
-        EmployeeId: dto.Scope === 'employee' ? dto.TargetId : undefined,
+        EmployeeCategoryId: dto.Scope === 'category' ? targetId : undefined,
+        EmployeeId: dto.Scope === 'employee' ? targetId : undefined,
         WorkDays: workDays as unknown as CalendarWorkDayDto[],
       },
       actorId,
