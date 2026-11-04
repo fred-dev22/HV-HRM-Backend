@@ -24,6 +24,16 @@
 
 export type OvertimeMethod = 'daily' | 'weekly';
 
+// Reglage client (TimeSetting overtime_method) : 0 = journalier, 1 = hebdomadaire,
+// 2 = les deux methodes sont proposees et la methode se choisit a chaque calcul.
+// Absent ou inconnu : journalier (methode historique de Pointage).
+export type OvertimeMethodSetting = OvertimeMethod | 'both';
+export function methodSettingOf(value: number | null | undefined): OvertimeMethodSetting {
+  if (value === 1) return 'weekly';
+  if (value === 2) return 'both';
+  return 'daily';
+}
+
 export type OvertimeCategory = 'HS01' | 'HS02' | 'HS03' | 'HS04' | 'HS09' | 'HS10';
 
 export interface TimeCalcSettings {
@@ -207,7 +217,8 @@ export function applyMonthlyNiCap(lines: OvertimeLine[], monthlyCapHours: number
   const byMonth = new Map<string, OvertimeLine[]>();
   for (const line of lines) {
     if (line.category !== 'HS01' && line.category !== 'HS02') continue;
-    const key = line.dateKey.slice(0, 7);
+    // Plafond propre a chaque employe : jamais partage entre deux employes.
+    const key = `${line.employeeId}|${line.dateKey.slice(0, 7)}`;
     if (!byMonth.has(key)) byMonth.set(key, []);
     byMonth.get(key)!.push(line);
   }

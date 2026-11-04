@@ -66,3 +66,13 @@ export class QueryMorphoRecordsDto extends PageDto {
   @IsBoolean()
   UnmatchedOnly?: boolean;
 }
+
+// Rattachement manuel d'une personne de la pointeuse a un employe du HRM.
+export class LinkMorphoPersonDto {
+  @IsString()
+  @MaxLength(100)
+  BiometricUuid!: string;
+
+  @IsUUID()
+  EmployeeId!: string;
+}

@@ -4,7 +4,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { ApprovalPoolService } from '../../approval-pool/approval-pool.service';
 import { NotificationService } from '../../notification/notification.service';
 import { isEntryWindowOpen } from './entry-window';
-import { CreateTimeEntryDto, DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
+import { AdjustTimeEntryDto, CreateTimeEntryDto, DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
 
 const ENTITY_TYPE = 'TimeEntry';
 const INCLUDE = {
@@ -35,6 +35,16 @@ export function resolveTimes(dateKey: string, hours: number | undefined, start?:
     clockIn: new Date(`${dateKey}T${start}:00`),
     clockOut: new Date(`${dateKey}T${end}:00`),
   };
+}
+
+const fmtHours = (h: number) => `${String(h).replace('.', ',')} h`;
+
+// Texte d'historique d'un ajustement : ancienne et nouvelle duree, plage horaire
+// et motif eventuel. Tient dans les 500 caracteres de la colonne.
+export function describeAdjustment(before: number, after: number, start?: string, end?: string, reason?: string): string {
+  const range = start && end ? ` (${start} à ${end})` : '';
+  const why = reason && reason.trim() ? ` : ${reason.trim()}` : '';
+  return `Durée ${fmtHours(before)} → ${fmtHours(after)}${range}${why}`.slice(0, 500);
 }
 
 // Saisies de temps (mission, reunion, panier, permanence...) et leur validation
@@ -315,6 +325,36 @@ export class TimeEntryService {
     if (!decision || decision.ValidatedByEmployeeId !== approverId) {
       throw new ForbiddenException("Vous n'êtes pas le validateur actuel de cette saisie");
     }
+  }
+
+  // Ajustement des heures par le validateur courant (ex : 1 h devient 3 h) : la
+  // saisie reste en attente, au meme point du circuit, et sa decision suit. Elle
+  // ne repart PAS au debut comme une modification de l'employe. L'ancienne et la
+  // nouvelle duree sont gardees dans l'historique, avec le motif.
+  async adjust(id: string, dto: AdjustTimeEntryDto, actorId: string, permissions: Set<string>) {
+    const existing = await this.findRaw(id);
+    await this.assertIsCurrentApprover(existing, actorId, permissions.has('TEMPS_ACCES'));
+    if (existing.EntryType === 'panier' || existing.EntryType === 'permanence') {
+      throw new BadRequestException('Cette saisie compte pour 1 par jour : il n\'y a pas d\'heures à ajuster');
+    }
+    const times = resolveTimes(keyOf(existing.Date), dto.Hours, dto.StartTime, dto.EndTime);
+    const before = Number(existing.Hours);
+    const sameClock =
+      !!times.clockIn === !!existing.FirstClockIn &&
+      (!times.clockIn || (times.clockIn.getTime() === existing.FirstClockIn?.getTime() && times.clockOut?.getTime() === existing.LastClockOut?.getTime()));
+    if (times.hours === before && sameClock) throw new BadRequestException('Aucune modification des heures');
+
+    const note = describeAdjustment(before, times.hours, dto.StartTime, dto.EndTime, dto.Comment);
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.timeManualEntryHistory.create({ data: { EntryId: id, Action: 'ADJUST', ActorId: actorId, Comment: note } });
+      return tx.timeManualEntry.update({
+        where: { Id: id },
+        data: { Hours: times.hours, FirstClockIn: times.clockIn, LastClockOut: times.clockOut, ModifiedAt: new Date() },
+        include: INCLUDE,
+      });
+    });
+    await this.notify(existing.EmployeeId, 'Saisie de temps ajustée', `Vos heures du ${keyOf(existing.Date)} ont été ajustées : ${note}`);
+    return updated;
   }
 
   async approve(id: string, dto: DecideTimeEntryDto, approverId: string, permissions: Set<string>) {

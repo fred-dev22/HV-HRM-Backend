@@ -8,6 +8,7 @@ import { isModuleEnabled } from '../../../common/modules/modules.config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { NotificationService } from '../../notification/notification.service';
 import { TimeCalculationService } from '../calculation/time-calculation.service';
+import { matchEmployeeId } from './employee-matching';
 import { ParsedMorphoRow, parseMorphoWorkbook } from './morpho-parser';
 import { QueryMorphoImportsDto, QueryMorphoRecordsDto, UpdateMorphoConfigDto } from './morpho.dto';
 
@@ -199,7 +200,7 @@ export class MorphoService implements OnModuleInit {
         continue;
       }
       seen.add(key);
-      const employeeId = byNumber.get(r.employeeNumber) ?? byBiometric.get(r.biometricUuid) ?? null;
+      const employeeId = matchEmployeeId(r, byBiometric, byNumber);
       if (!employeeId) unmatched++;
       data.push({
         ImportId: imp.Id,
@@ -300,6 +301,66 @@ export class MorphoService implements OnModuleInit {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  // Personnes de la pointeuse dont les pointages sont restes sans employe : une
+  // ligne par identifiant biometrique, pour que le RH les rattache a la main.
+  async listUnmatchedPeople() {
+    const groups = await this.prisma.timeMorphoRecord.groupBy({
+      by: ['BiometricUuid', 'FirstName', 'LastName', 'EmployeeNumber'],
+      where: { EmployeeId: null },
+      _count: { _all: true },
+      _min: { DateJour: true },
+      _max: { DateJour: true },
+    });
+    const people = new Map<
+      string,
+      { biometricUuid: string; firstName: string; lastName: string; employeeNumber: string; records: number; from: string; to: string }
+    >();
+    for (const g of groups) {
+      const from = g._min.DateJour!.toISOString().slice(0, 10);
+      const to = g._max.DateJour!.toISOString().slice(0, 10);
+      const cur = people.get(g.BiometricUuid);
+      if (!cur) {
+        people.set(g.BiometricUuid, {
+          biometricUuid: g.BiometricUuid,
+          firstName: g.FirstName,
+          lastName: g.LastName,
+          employeeNumber: g.EmployeeNumber,
+          records: g._count._all,
+          from,
+          to,
+        });
+      } else {
+        cur.records += g._count._all;
+        if (from < cur.from) cur.from = from;
+        if (to > cur.to) cur.to = to;
+      }
+    }
+    return Array.from(people.values()).sort((a, b) => `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`, 'fr'));
+  }
+
+  // Associe une personne de la pointeuse a un employe du HRM : l'identifiant
+  // biometrique est enregistre sur la fiche employe (il servira aux imports
+  // suivants), puis les pointages restes sans employe sont rattaches et les
+  // heures recalculees.
+  async linkPerson(biometricUuid: string, employeeId: string) {
+    const employee = await this.prisma.employee.findFirst({
+      where: { Id: employeeId, IsDeleted: false },
+      select: { Id: true, BiometricUuid: true },
+    });
+    if (!employee) throw new NotFoundException('Employé introuvable');
+    if (employee.BiometricUuid && employee.BiometricUuid !== biometricUuid) {
+      throw new BadRequestException('Cet employé est déjà associé à un autre identifiant de pointeuse');
+    }
+    const owner = await this.prisma.employee.findFirst({
+      where: { BiometricUuid: biometricUuid, IsDeleted: false, NOT: { Id: employeeId } },
+      select: { Id: true },
+    });
+    if (owner) throw new BadRequestException('Cet identifiant de pointeuse est déjà associé à un autre employé');
+
+    await this.prisma.employee.update({ where: { Id: employeeId }, data: { BiometricUuid: biometricUuid } });
+    return this.rematchUnmatched();
+  }
+
   // Rattrape les lignes restees sans employe apres l'ajout/correction d'un
   // matricule ou d'un identifiant biometrique, puis recalcule les jours touches.
   async rematchUnmatched(): Promise<{ matched: number; stillUnmatched: number }> {
@@ -317,7 +378,7 @@ export class MorphoService implements OnModuleInit {
     let matched = 0;
     const dateKeys: string[] = [];
     for (const o of orphans) {
-      const id = byNumber.get(o.EmployeeNumber) ?? byBiometric.get(o.BiometricUuid) ?? null;
+      const id = matchEmployeeId({ biometricUuid: o.BiometricUuid, employeeNumber: o.EmployeeNumber }, byBiometric, byNumber);
       if (!id) continue;
       await this.prisma.timeMorphoRecord.update({ where: { Id: o.Id }, data: { EmployeeId: id } });
       matched++;

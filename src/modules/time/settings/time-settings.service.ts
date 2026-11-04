@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { TIME_SETTINGS } from './time-setting-defaults';
 import { CreateTimeCodeDto, UpdateTimeCodeDto, UpdateTimeTypeDto } from './time-settings.dto';
 
 // Codes dont le calcul des heures depend par leur nom : on peut en changer la
@@ -14,7 +15,17 @@ export const RESERVED_TIME_CODES = ['HS01', 'HS02', 'HS03', 'HS04', 'HS09', 'HS1
 export class TimeSettingsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
+  // Les reglages d'usine absents (ajoutes par une version plus recente) sont crees
+  // a la lecture : un client deja installe les recoit sans relancer le seed.
+  async findAll() {
+    const rows = await this.prisma.timeSetting.findMany({ orderBy: { Key: 'asc' } });
+    const missing = TIME_SETTINGS.filter((d) => !rows.some((r) => r.Key === d.Key));
+    if (missing.length === 0) return rows;
+    try {
+      await this.prisma.timeSetting.createMany({ data: missing });
+    } catch {
+      // creation concurrente : le reglage existe deja, la relecture ci-dessous le montre
+    }
     return this.prisma.timeSetting.findMany({ orderBy: { Key: 'asc' } });
   }
 

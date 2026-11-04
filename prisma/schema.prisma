@@ -224,8 +224,8 @@ model Employee {
 
   // Module Temps de travail : un cadre est exclu du calcul des heures
   // supplementaires (reprise de la regle isBe du systeme Pointage). BiometricUuid
-  // = identifiant de l'employe dans la pointeuse Morpho (colonne 0 des exports),
-  // le rapprochement se fait d'abord par matricule.
+  // = identifiant de l'employe dans la pointeuse Morpho (colonne 1 des exports),
+  // le rapprochement se fait d'abord par cet identifiant, puis par matricule.
   IsCadre       Boolean @default(false)
   BiometricUuid String? @db.NVarChar(100)
 
@@ -2186,7 +2186,7 @@ model TimeManualEntry {
 model TimeManualEntryHistory {
   Id        String   @id @default(uuid()) @db.UniqueIdentifier
   EntryId   String   @db.UniqueIdentifier
-  // Action: CREATE | UPDATE | APPROVE | REJECT
+  // Action: CREATE | UPDATE | ADJUST | APPROVE | REJECT
   Action    String   @db.NVarChar(20)
   ActorId   String   @db.UniqueIdentifier
   Comment   String?  @db.NVarChar(500)

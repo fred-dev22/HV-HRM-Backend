@@ -88,6 +88,28 @@ export class UpdateTimeEntryDto {
   Comments?: string;
 }
 
+// Ajustement des heures par un validateur : duree, ou heure de debut et de fin.
+export class AdjustTimeEntryDto {
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(24)
+  Hours?: number;
+
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de début au format HH:mm' })
+  StartTime?: string;
+
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de fin au format HH:mm' })
+  EndTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(400)
+  Comment?: string;
+}
+
 export class DecideTimeEntryDto {
   @IsOptional()
   @IsString()

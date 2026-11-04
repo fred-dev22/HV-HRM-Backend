@@ -1,10 +1,12 @@
 import {
   DEFAULT_TIME_SETTINGS,
+  applyMonthlyNiCap,
   buildSageRows,
   computeDailyHours,
   computeOvertimeLines,
   computePanierDays,
   computePermanenceLines,
+  methodSettingOf,
   mondayOf,
   nightOverlapHours,
   requiredHoursOfSchedule,
@@ -276,5 +278,31 @@ describe('export Sage', () => {
     expect(() =>
       buildSageRows([{ employeeNumber: '001', codeId: 'a', code: 'HS01', sageTypeCode: null, hours: 1 }]),
     ).toThrow(/HS01/);
+  });
+});
+
+describe('applyMonthlyNiCap : plafond par employe', () => {
+  it('ne partage jamais les 20 h non imposables entre deux employes', () => {
+    const lines: OvertimeLine[] = [
+      { employeeId: 'a', dateKey: '2026-01-05', hours: 15, category: 'HS01' },
+      { employeeId: 'b', dateKey: '2026-01-06', hours: 15, category: 'HS01' },
+    ];
+    applyMonthlyNiCap(lines, 20);
+    const ni = (id: string) => lines.filter((l) => l.employeeId === id && l.category === 'HS03').reduce((s, l) => s + l.hours, 0);
+    expect(ni('a')).toBe(15);
+    expect(ni('b')).toBe(15);
+  });
+});
+
+describe('methodSettingOf', () => {
+  it('0 = journalier, 1 = hebdomadaire, 2 = les deux', () => {
+    expect(methodSettingOf(0)).toBe('daily');
+    expect(methodSettingOf(1)).toBe('weekly');
+    expect(methodSettingOf(2)).toBe('both');
+  });
+  it('absent ou inconnu : journalier (methode historique)', () => {
+    expect(methodSettingOf(undefined)).toBe('daily');
+    expect(methodSettingOf(null)).toBe('daily');
+    expect(methodSettingOf(7)).toBe('daily');
   });
 });

@@ -4,7 +4,7 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 import { CurrentPermissions } from '../../../common/decorators/current-permissions.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { TimeEntryService } from './time-entry.service';
-import { CreateTimeEntryDto, DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
+import { AdjustTimeEntryDto, CreateTimeEntryDto, DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
 
 // @RequirePermission n'accepte qu'un seul code : les routes ouvertes a
 // plusieurs permissions (employe OU validateur OU RH) controlent ici, et le
@@ -75,6 +75,18 @@ export class TimeEntryController {
   cancel(@Param('id', ParseUUIDPipe) id: string, @CurrentUser('employeeId') me: string, @CurrentPermissions() permissions: Set<string>) {
     requireAny(permissions, 'TEMPS_SAISIR', 'TEMPS_ACCES');
     return this.service.cancel(id, me, permissions);
+  }
+
+  // Le validateur courant ajuste les heures avant de decider (historique conserve).
+  @Patch(':id/adjust')
+  adjust(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdjustTimeEntryDto,
+    @CurrentUser('employeeId') me: string,
+    @CurrentPermissions() permissions: Set<string>,
+  ) {
+    requireAny(permissions, 'TEMPS_VALIDER', 'TEMPS_ACCES');
+    return this.service.adjust(id, dto, me, permissions);
   }
 
   @Post(':id/approve')

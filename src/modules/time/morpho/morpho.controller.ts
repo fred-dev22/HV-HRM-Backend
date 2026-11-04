@@ -17,7 +17,7 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { MorphoService } from './morpho.service';
 import { listFolders } from './folder-browser';
-import { QueryMorphoImportsDto, QueryMorphoRecordsDto, UpdateMorphoConfigDto } from './morpho.dto';
+import { LinkMorphoPersonDto, QueryMorphoImportsDto, QueryMorphoRecordsDto, UpdateMorphoConfigDto } from './morpho.dto';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
@@ -72,6 +72,18 @@ export class MorphoController {
   @Get('records')
   findRecords(@Query() q: QueryMorphoRecordsDto) {
     return this.service.findRecords(q);
+  }
+
+  // Personnes de la pointeuse sans employe correspondant.
+  @Get('unmatched-people')
+  unmatchedPeople() {
+    return this.service.listUnmatchedPeople();
+  }
+
+  // Rattachement manuel d'une personne de la pointeuse a un employe.
+  @Post('link')
+  link(@Body() dto: LinkMorphoPersonDto) {
+    return this.service.linkPerson(dto.BiometricUuid, dto.EmployeeId);
   }
 
   // Apres correction d'un matricule : rattache les pointages restes sans employe.

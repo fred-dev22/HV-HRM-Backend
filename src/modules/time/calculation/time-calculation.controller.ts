@@ -25,7 +25,7 @@ export class TimeCalculationController {
   @Post('calculation/overtime')
   @RequirePermission('TEMPS_ACCES')
   overtime(@Body() dto: CalculateOvertimeDto) {
-    return this.service.calculateOvertime(dto.From, dto.To, dto.Method ?? 'daily');
+    return this.service.calculateOvertime(dto.From, dto.To, dto.Method);
   }
 
   @Get('calculation/report')

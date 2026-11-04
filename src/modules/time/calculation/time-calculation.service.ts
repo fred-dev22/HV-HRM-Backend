@@ -4,6 +4,7 @@ import { CalendarService } from '../../calendar/calendar.service';
 import {
   DEFAULT_TIME_SETTINGS,
   OvertimeMethod,
+  methodSettingOf,
   PermanenceRates,
   SageSourceLine,
   TimeCalcSettings,
@@ -34,6 +35,8 @@ export interface OvertimeResult {
   calculated: number;
   excludedCadres: number;
   breakdown: Record<string, number>;
+  // Methode effectivement utilisee (journaliere ou hebdomadaire).
+  method: OvertimeMethod;
   period: { from: string; to: string };
 }
 
@@ -314,8 +317,25 @@ export class TimeCalculationService {
 
   // ── T5 : heures supplementaires, panier, permanence ───────────────────────
 
-  async calculateOvertime(from: string, to: string, method: OvertimeMethod = 'daily'): Promise<OvertimeResult> {
+  // Methode retenue : celle du reglage client. Avec "les deux", la methode
+  // demandee est utilisee (journalier par defaut) ; avec une methode fixe, une
+  // demande differente est refusee plutot que d'etre ignoree en silence, car elle
+  // change la paie.
+  private async resolveMethod(requested?: OvertimeMethod): Promise<OvertimeMethod> {
+    const row = await this.prisma.timeSetting.findUnique({ where: { Key: 'overtime_method' } });
+    const setting = methodSettingOf(row ? Number(row.Value) : undefined);
+    if (setting === 'both') return requested ?? 'daily';
+    if (requested && requested !== setting) {
+      throw new BadRequestException(
+        `Le calcul est réglé sur la méthode ${setting === 'daily' ? 'journalière' : 'hebdomadaire'} (Configuration > Réglages).`,
+      );
+    }
+    return setting;
+  }
+
+  async calculateOvertime(from: string, to: string, requestedMethod?: OvertimeMethod): Promise<OvertimeResult> {
     assertRange(from, to);
+    const method = await this.resolveMethod(requestedMethod);
     const settings = await this.loadSettings();
     // La methode hebdomadaire demande la semaine entiere : on remonte au lundi.
     const widenedFrom = method === 'weekly' ? mondayOf(from) : from;
@@ -422,7 +442,7 @@ export class TimeCalculationService {
 
     const breakdown: Record<string, number> = {};
     for (const l of out) breakdown[l.code] = round2((breakdown[l.code] ?? 0) + l.hours);
-    return { calculated: out.length, excludedCadres, breakdown, period: { from, to } };
+    return { calculated: out.length, excludedCadres, breakdown, method, period: { from, to } };
   }
 
   // ── Lecture : rapport et export Sage ──────────────────────────────────────

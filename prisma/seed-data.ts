@@ -181,17 +181,8 @@ export const TIME_ATTENDANCE_TYPES: { Name: string; Description?: string; SageTy
   { Name: 'Permanence', SageTypeCode: 3, Codes: ['2210'] },
 ];
 
-export const TIME_SETTINGS: { Key: string; Value: number; Label: string }[] = [
-  { Key: 'panier_min_hours', Value: 8, Label: 'Durée continue minimale pour un Panier (heures)' },
-  { Key: 'night_window_start_hour', Value: 22, Label: 'Début de la fenêtre de nuit' },
-  { Key: 'night_window_end_hour', Value: 5, Label: 'Fin de la fenêtre de nuit' },
-  { Key: 'weekly_hs01_threshold_hours', Value: 8, Label: 'Seuil hebdomadaire HS01/HS02' },
-  { Key: 'monthly_ni_cap_hours', Value: 20, Label: 'Plafond mensuel non imposable HS03/HS04' },
-  // Corrections par rapport au systeme Pointage, desactivees tant que le client
-  // ne les a pas validees (elles changent les heures payees). 1 = active.
-  { Key: 'deduct_break', Value: 0, Label: 'Retirer la pause du temps travaillé (1 = oui)' },
-  { Key: 'include_non_working_days', Value: 0, Label: 'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)' },
-];
+// Les reglages d'usine vivent dans src : le serveur en a besoin pour completer la base d'un client deja installe.
+export { TIME_SETTINGS } from '../src/modules/time/settings/time-setting-defaults';
 
 export const TIME_PERMANENCE_RATES: { DayType: string; Amount: number }[] = [
   { DayType: 'OUVRABLE', Amount: 5000 },
