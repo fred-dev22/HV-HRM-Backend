@@ -11,6 +11,7 @@ import {
 import { CalendarService } from './calendar.service';
 import { CreateCalendarDto } from './dto/create-calendar.dto';
 import { UpdateCalendarDto } from './dto/update-calendar.dto';
+import { ImportCalendarScheduleDto } from './dto/import-calendar-schedule.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
@@ -22,6 +23,14 @@ export class CalendarController {
   @RequirePermission('CONFIG_CALENDRIER')
   create(@Body() dto: CreateCalendarDto, @CurrentUser('employeeId') employeeId: string) {
     return this.service.create(dto, employeeId);
+  }
+
+  // Import des horaires (Excel/CSV) : une ligne = jours + heures + pause pour une portee.
+  // Avant ':id' pour ne pas etre pris pour un identifiant.
+  @Post('import-schedule')
+  @RequirePermission('CONFIG_CALENDRIER')
+  importSchedule(@Body() dto: ImportCalendarScheduleDto, @CurrentUser('employeeId') employeeId: string) {
+    return this.service.importSchedule(dto, employeeId);
   }
 
   @Get()

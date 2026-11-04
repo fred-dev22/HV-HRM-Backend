@@ -3,6 +3,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { CreateCalendarDto } from './dto/create-calendar.dto';
 import { UpdateCalendarDto } from './dto/update-calendar.dto';
 import { CalendarWorkDayDto } from './dto/calendar-work-day.dto';
+import { ImportCalendarScheduleDto } from './dto/import-calendar-schedule.dto';
+import { mergeScheduleDays } from './calendar-schedule-import';
 
 const WORK_DAYS_INCLUDE = {
   workDays: true,
@@ -188,6 +190,45 @@ export class CalendarService {
 
       return tx.calendar.findUniqueOrThrow({ where: { Id: id }, include: WORK_DAYS_INCLUDE });
     });
+  }
+
+  // Import d'un horaire (jours, heures, pause) pour le calendrier global, celui d'une
+  // categorie ou celui d'un employe. Le calendrier est cree s'il n'existe pas (les jours
+  // non indiques sont alors des jours de repos) ; sinon seuls les jours indiques changent.
+  async importSchedule(dto: ImportCalendarScheduleDto, actorId: string) {
+    let calendar: Awaited<ReturnType<CalendarService['findOne']>> | null = null;
+    let label = '';
+    if (dto.Scope === 'global') {
+      calendar = await this.prisma.calendar.findFirst({ where: { IsDefault: true }, include: WORK_DAYS_INCLUDE });
+      if (!calendar) throw new BadRequestException("Aucun calendrier par défaut n'est configuré");
+    } else {
+      if (!dto.TargetId) throw new BadRequestException(dto.Scope === 'category' ? 'Catégorie requise' : 'Employé requis');
+      if (dto.Scope === 'category') {
+        const category = await this.prisma.employeeCategory.findFirst({ where: { Id: dto.TargetId }, select: { Name: true } });
+        if (!category) throw new NotFoundException('Catégorie introuvable');
+        label = category.Name;
+        calendar = await this.findByCategory(dto.TargetId);
+      } else {
+        const employee = await this.prisma.employee.findFirst({ where: { Id: dto.TargetId, IsDeleted: false }, select: { FullName: true } });
+        if (!employee) throw new NotFoundException('Employé introuvable');
+        label = employee.FullName;
+        calendar = await this.findByEmployee(dto.TargetId);
+      }
+    }
+
+    const workDays = mergeScheduleDays(calendar?.workDays ?? [], dto);
+    if (calendar) {
+      return this.update(calendar.Id, { WorkDays: workDays as unknown as CalendarWorkDayDto[] }, actorId);
+    }
+    return this.create(
+      {
+        Name: `Horaires ${label}`.slice(0, 100),
+        EmployeeCategoryId: dto.Scope === 'category' ? dto.TargetId : undefined,
+        EmployeeId: dto.Scope === 'employee' ? dto.TargetId : undefined,
+        WorkDays: workDays as unknown as CalendarWorkDayDto[],
+      },
+      actorId,
+    );
   }
 
   async remove(id: string) {
