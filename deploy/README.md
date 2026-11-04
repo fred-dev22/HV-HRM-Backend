@@ -42,6 +42,8 @@ vers `brand/`, ne touche ni la base, ni le code, ni le `.env`) :
 
 ```bash
 npm run client:hv       # profil HV : deploy/hv/brand
+npm run client:congelo  # profil Congélo : deploy/congelo/brand (socle seul)
+npm run client:grt      # profil GRT : marque Congélo + module Temps de travail
 npm run client:reset    # retour à l'application générique
 ```
 

@@ -9,6 +9,7 @@
     "build": "nest build",
     "client:hv": "node scripts/apply-brand.mjs --preset deploy/hv/brand",
     "client:congelo": "node scripts/apply-brand.mjs --preset deploy/congelo/brand",
+    "client:grt": "node scripts/apply-brand.mjs --preset deploy/grt/brand",
     "client:reset": "node scripts/apply-brand.mjs --reset",
     "client:new": "node scripts/new-client.mjs",
     "client:check": "node scripts/check-instance.mjs",
