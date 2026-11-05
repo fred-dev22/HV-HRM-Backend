@@ -145,6 +145,10 @@ Identifiants du compte créé par `02-seed.sql` : ceux de `ADMIN-CREDENTIALS.txt
   après la base, et prévoir une politique de redémarrage.
 - **`CORS_ORIGIN` non renseignée** ⇒ seul `http://localhost:5173` est accepté
   et le frontend de production est bloqué par le navigateur.
+- **Module Temps de travail : `MORPHO_ROOT`** (facultatif) limite le choix du dossier des exports de la
+  pointeuse à un dossier du serveur (ex. `D:\Morpho`) : l'écran n'en sort pas et tout autre
+  dossier est refusé. Sans cette variable, tout le serveur est parcourable par les comptes
+  ayant `TEMPS_ACCES`.
 - **`build:iis` ne tourne que sous Windows** (il utilise `copy` et `xcopy`).
 - **`QUOTED_IDENTIFIER`** : `Employee.UserId` porte un index *filtré*. SQL
   Server exige `SET QUOTED_IDENTIFIER ON` pour le créer **et pour écrire dans

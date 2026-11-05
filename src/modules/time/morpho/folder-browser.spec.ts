@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { listFolders } from './folder-browser';
+import { isInsideRoot, listFolders } from './folder-browser';
 
 describe('listFolders', () => {
   let root: string;
@@ -43,5 +43,47 @@ describe('listFolders', () => {
     const r = listFolders('');
     expect(r.parent).toBeNull();
     expect(r.folders.length).toBeGreaterThan(0);
+  });
+
+  it("ne propose plus Bureau, Documents ou Téléchargements : seulement le dossier configuré", () => {
+    expect(listFolders(root).shortcuts).toEqual([]);
+    const exports = path.join(root, 'exports');
+    expect(listFolders(root, { configured: exports }).shortcuts).toEqual([{ name: 'Dossier configuré', path: path.resolve(exports) }]);
+    expect(listFolders(root, { configured: path.join(root, 'absent') }).shortcuts).toEqual([]);
+  });
+
+  describe('avec une zone autorisée (MORPHO_ROOT)', () => {
+    it("démarre dans la zone et ne remonte pas au-dessus", () => {
+      const r = listFolders('', { root });
+      expect(r.path).toBe(path.resolve(root));
+      expect(r.parent).toBeNull();
+      expect(r.root).toBe(path.resolve(root));
+      expect(listFolders(path.join(root, 'exports'), { root }).parent).toBe(path.resolve(root));
+    });
+
+    it('refuse un dossier hors de la zone, même voisin au nom proche', () => {
+      const sibling = fs.mkdtempSync(root + '-autre-');
+      try {
+        expect(() => listFolders(os.tmpdir(), { root })).toThrow(BadRequestException);
+        expect(() => listFolders(sibling, { root })).toThrow(BadRequestException);
+        expect(() => listFolders(path.join(root, '..'), { root })).toThrow(BadRequestException);
+      } finally {
+        fs.rmSync(sibling, { recursive: true, force: true });
+      }
+    });
+
+    it("n'affiche pas un dossier configuré situé hors de la zone", () => {
+      expect(listFolders('', { root, configured: os.tmpdir() }).shortcuts).toEqual([]);
+    });
+  });
+});
+
+describe('isInsideRoot', () => {
+  it('reconnaît la racine et ses sous-dossiers, pas les autres', () => {
+    const root = path.resolve(os.tmpdir(), 'morpho');
+    expect(isInsideRoot(root, root)).toBe(true);
+    expect(isInsideRoot(path.join(root, 'a', 'b'), root)).toBe(true);
+    expect(isInsideRoot(root + '-evil', root)).toBe(false);
+    expect(isInsideRoot(path.join(root, '..', 'x'), root)).toBe(false);
   });
 });

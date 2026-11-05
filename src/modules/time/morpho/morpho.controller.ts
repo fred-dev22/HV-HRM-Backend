@@ -16,7 +16,7 @@ import { RequireModule } from '../../../common/modules/require-module.decorator'
 import { RequirePermission } from '../../../common/decorators/require-permission.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { MorphoService } from './morpho.service';
-import { listFolders } from './folder-browser';
+import { listFolders, morphoRoot } from './folder-browser';
 import { LinkMorphoPersonDto, QueryMorphoImportsDto, QueryMorphoRecordsDto, UpdateMorphoConfigDto } from './morpho.dto';
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -34,8 +34,9 @@ export class MorphoController {
 
   // Parcours des dossiers du serveur pour choisir le dossier d'import.
   @Get('browse')
-  browse(@Query('path') requested?: string) {
-    return listFolders(requested);
+  async browse(@Query('path') requested?: string) {
+    const config = await this.service.getConfig();
+    return listFolders(requested, { root: morphoRoot(), configured: config.FolderPath });
   }
 
   @Put('config')

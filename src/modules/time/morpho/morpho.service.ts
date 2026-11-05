@@ -8,6 +8,7 @@ import { isModuleEnabled } from '../../../common/modules/modules.config';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { NotificationService } from '../../notification/notification.service';
 import { TimeCalculationService } from '../calculation/time-calculation.service';
+import { isInsideRoot, morphoRoot } from './folder-browser';
 import { matchEmployeeId } from './employee-matching';
 import { ParsedMorphoRow, parseMorphoWorkbook } from './morpho-parser';
 import { QueryMorphoImportsDto, QueryMorphoRecordsDto, UpdateMorphoConfigDto } from './morpho.dto';
@@ -62,6 +63,10 @@ export class MorphoService implements OnModuleInit {
 
   async updateConfig(dto: UpdateMorphoConfigDto) {
     const current = await this.getConfig();
+    const root = morphoRoot();
+    if (root && dto.FolderPath && !isInsideRoot(dto.FolderPath, root)) {
+      throw new BadRequestException(`Le dossier doit se trouver dans la zone autorisée : ${root}`);
+    }
     const cron = dto.CronSchedule !== undefined ? dto.CronSchedule : current.CronSchedule;
     const active = dto.IsScheduleActive ?? current.IsScheduleActive;
     if (active) {
