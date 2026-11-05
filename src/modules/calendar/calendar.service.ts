@@ -195,13 +195,14 @@ export class CalendarService {
   // Import d'un horaire (jours, heures, pause) pour le calendrier global, celui d'une
   // categorie ou celui d'un employe. Le calendrier est cree s'il n'existe pas (les jours
   // non indiques sont alors des jours de repos) ; sinon seuls les jours indiques changent.
+  // Sur une base neuve, le calendrier global n'existe pas encore : il est cree comme defaut.
   async importSchedule(dto: ImportCalendarScheduleDto, actorId: string) {
     let calendar: Awaited<ReturnType<CalendarService['findOne']>> | null = null;
     let label = '';
     let targetId: string | undefined;
     if (dto.Scope === 'global') {
       calendar = await this.prisma.calendar.findFirst({ where: { IsDefault: true }, include: WORK_DAYS_INCLUDE });
-      if (!calendar) throw new BadRequestException("Aucun calendrier par défaut n'est configuré");
+      label = 'global';
     } else {
       const code = dto.TargetCode?.trim();
       if (!code) throw new BadRequestException(dto.Scope === 'category' ? 'Indiquez le code de la catégorie' : "Indiquez le matricule de l'employé");
@@ -227,6 +228,7 @@ export class CalendarService {
     return this.create(
       {
         Name: `Horaires ${label}`.slice(0, 100),
+        IsDefault: dto.Scope === 'global' ? true : undefined,
         EmployeeCategoryId: dto.Scope === 'category' ? targetId : undefined,
         EmployeeId: dto.Scope === 'employee' ? targetId : undefined,
         WorkDays: workDays as unknown as CalendarWorkDayDto[],
