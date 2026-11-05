@@ -333,8 +333,22 @@ export class TimeCalculationService {
     return setting;
   }
 
+  // Etat des calculs d'une periode : T5 part des heures journalieres de T4.
+  async calculationStatus(from: string, to: string): Promise<{ dailyRows: number; overtimeRows: number }> {
+    assertRange(from, to);
+    const range = { gte: toDate(from), lte: toDate(to) };
+    const [dailyRows, overtimeRows] = await Promise.all([
+      this.prisma.timeDailyHours.count({ where: { Date: range } }),
+      this.prisma.timeOvertime.count({ where: { Date: range } }),
+    ]);
+    return { dailyRows, overtimeRows };
+  }
+
   async calculateOvertime(from: string, to: string, requestedMethod?: OvertimeMethod): Promise<OvertimeResult> {
     assertRange(from, to);
+    if ((await this.calculationStatus(from, to)).dailyRows === 0) {
+      throw new BadRequestException("Aucune heure journalière calculée sur cette période. Lancez d'abord le calcul T4.");
+    }
     const method = await this.resolveMethod(requestedMethod);
     const settings = await this.loadSettings();
     // La methode hebdomadaire demande la semaine entiere : on remonte au lundi.

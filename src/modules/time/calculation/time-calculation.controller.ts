@@ -28,6 +28,12 @@ export class TimeCalculationController {
     return this.service.calculateOvertime(dto.From, dto.To, dto.Method);
   }
 
+  @Get('calculation/status')
+  @RequirePermission('TEMPS_ACCES')
+  status(@Query() q: PeriodDto) {
+    return this.service.calculationStatus(q.From, q.To);
+  }
+
   @Get('calculation/report')
   @RequirePermission('TEMPS_ACCES')
   report(@Query() q: PeriodDto) {
