@@ -27,6 +27,7 @@ import * as path from 'path';
 import * as sql from 'mssql';
 import { Prisma, PrismaClient } from './generated/client';
 import { PrismaMssql } from '@prisma/adapter-mssql';
+import { describeLegacyChanges } from '../src/modules/time/legacy-history';
 
 const argv = process.argv.slice(2);
 const flag = (name: string) => argv.includes(`--${name}`);
@@ -812,7 +813,6 @@ async function phaseHistory() {
     );
     const ch = counter('manual_entry_history');
     ch.source = hist.length;
-    let truncated = 0;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const data: any[] = [];
     for (const r of hist) {
@@ -826,8 +826,9 @@ async function phaseHistory() {
         ch.skipped++;
         continue;
       }
-      if ((r.changes ?? '').length > 500) truncated++;
-      data.push({ Id: randomUUID(), EntryId: entryId, Action: String(r.action).slice(0, 20), ActorId: actor, Comment: (r.changes ?? '').slice(0, 500) || null, CreatedAt: r.changedAt, _legacy: Number(r.id) });
+      // Le JSON de Pointage ({champ: {before, after}}) est traduit en texte lisible.
+      const comment = describeLegacyChanges(String(r.action), r.changes);
+      data.push({ Id: randomUUID(), EntryId: entryId, Action: String(r.action).slice(0, 20), ActorId: actor, Comment: comment, CreatedAt: r.changedAt, _legacy: Number(r.id) });
     }
     if (APPLY) {
       for (const part of chunk(data)) {
@@ -837,7 +838,6 @@ async function phaseHistory() {
       await flushMap();
     }
     ch.created += data.length;
-    if (truncated) warn(`${truncated} ligne(s) d'historique de saisie tronquee(s) a 500 caracteres (detail complet reste dans la base Pointage).`);
   }
 
   // Heures du jour
