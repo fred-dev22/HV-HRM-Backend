@@ -16,6 +16,8 @@ import {
   mondayOf,
   requiredHoursOfSchedule,
   round2,
+  applyMonthlyNiCap,
+  type OvertimeCategory,
   type ClockRecord,
   type DayHours,
 } from './overtime-engine';
@@ -47,6 +49,7 @@ interface EmployeeContext {
   isExpatriate: boolean;
   isCadre: boolean;
   organizationUnitId: string;
+  createdAt: number;
 }
 
 const dateKey = (d: Date): string => d.toISOString().slice(0, 10);
@@ -64,6 +67,11 @@ function assertRange(from: string, to: string) {
 // Branche le moteur de calcul (fonctions pures) sur les donnees du HRM :
 // pointages Morpho, Calendrier (employe > categorie > global), jours feries,
 // saisies validees. Ecrit TimeDailyHours et TimeOvertime.
+// Ecriture d'une periode (suppression puis insertion par paquets) : des milliers de lignes depassent
+// facilement le delai de 5 s par defaut d'une transaction Prisma (erreur P2028 "transaction expiree"
+// vue sur un mois de pointage). Le calcul est fait avant la transaction ; elle ne fait qu'ecrire.
+const WRITE_TX_OPTIONS = { timeout: 300_000, maxWait: 30_000 };
+
 @Injectable()
 export class TimeCalculationService {
   private readonly logger = new Logger(TimeCalculationService.name);
@@ -85,6 +93,7 @@ export class TimeCalculationService {
       nightEndHour: byKey.get('night_window_end_hour') ?? d.nightEndHour,
       weeklyHs01ThresholdHours: byKey.get('weekly_hs01_threshold_hours') ?? d.weeklyHs01ThresholdHours,
       monthlyNiCapHours: byKey.get('monthly_ni_cap_hours') ?? d.monthlyNiCapHours,
+      monthlyNiCapCompanyWide: (byKey.get('monthly_ni_cap_company_wide') ?? (d.monthlyNiCapCompanyWide ? 1 : 0)) === 1,
     };
   }
 
@@ -104,6 +113,7 @@ export class TimeCalculationService {
         IsExpatriate: true,
         IsCadre: true,
         OrganizationUnitId: true,
+        CreatedAt: true,
       },
     });
     return new Map(
@@ -116,6 +126,7 @@ export class TimeCalculationService {
           isExpatriate: e.IsExpatriate,
           isCadre: e.IsCadre,
           organizationUnitId: e.OrganizationUnitId,
+          createdAt: e.CreatedAt.getTime(),
         },
       ]),
     );
@@ -305,12 +316,12 @@ export class TimeCalculationService {
           data: days.slice(i, i + 500).map((d) => ({
             EmployeeId: d.employeeId,
             Date: toDate(d.dateKey),
-            WorkedHours: round2(d.workedHours),
+            WorkedHours: d.workedHours,
             RequiredHours: d.requiredHours,
           })),
         });
       }
-    });
+    }, WRITE_TX_OPTIONS);
 
     return { calculated: days.length, skipped, employeesWithoutCalendar, period: { from, to } };
   }
@@ -440,6 +451,19 @@ export class TimeCalculationService {
       }
     }
 
+    if (settings.monthlyNiCapCompanyWide) {
+      // Un seul plafond mensuel pour toute l'entreprise : consomme par date, puis par employe.
+      const hs = out
+        .filter((o) => o.code === 'HS01' || o.code === 'HS02')
+        .map((o) => ({ employeeId: o.employeeId, dateKey: o.dateKey, hours: o.hours, category: o.code as OvertimeCategory }));
+      // Meme jour : l'employe cree le premier est servi le premier (comme l'ordre d'id de Pointage).
+      const rank = new Map(Array.from(employees.values()).map((e) => [e.id, e.createdAt]));
+      applyMonthlyNiCap(hs, settings.monthlyNiCapHours, true, rank);
+      const rest = out.filter((o) => o.code !== 'HS01' && o.code !== 'HS02');
+      out.length = 0;
+      out.push(...rest, ...hs.map((l) => ({ employeeId: l.employeeId, dateKey: l.dateKey, code: l.category as string, hours: l.hours })));
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await tx.timeOvertime.deleteMany({ where: { Date: { gte: toDate(from), lte: toDate(to) } } });
       for (let i = 0; i < out.length; i += 500) {
@@ -448,14 +472,15 @@ export class TimeCalculationService {
             EmployeeId: l.employeeId,
             CodeId: codeId.get(l.code)!,
             Date: toDate(l.dateKey),
-            Hours: l.hours,
+            // Chaque ligne est arrondie au centieme a l'enregistrement, comme Pointage : les totaux Sage s'additionnent sur ces lignes.
+            Hours: round2(l.hours),
           })),
         });
       }
-    });
+    }, WRITE_TX_OPTIONS);
 
     const breakdown: Record<string, number> = {};
-    for (const l of out) breakdown[l.code] = round2((breakdown[l.code] ?? 0) + l.hours);
+    for (const l of out) breakdown[l.code] = round2((breakdown[l.code] ?? 0) + round2(l.hours));
     return { calculated: out.length, excludedCadres, breakdown, method, period: { from, to } };
   }
 
@@ -528,6 +553,31 @@ export class TimeCalculationService {
     return rows.map((r) => r.Id);
   }
 
+  // Heures prevues de CHAQUE jour du calendrier (pas seulement des jours pointes), comme la
+  // feuille de temps de Pointage : ferie = 0, sinon horaire de l'employe (employe > categorie >
+  // global), 0 le jour non travaille ou sans horaire. Cle : `${employeId}|${AAAA-MM-JJ}`.
+  private async requiredPerDay(employeeIds: string[], from: string, to: string): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (employeeIds.length === 0) return result;
+    const employees = await this.loadEmployees(employeeIds);
+    const holidayRows = await this.loadHolidayRows(from, to);
+    const ancestors = await this.loadOrganizationAncestors();
+    const cache = new Map<string, { required: (number | null)[]; breakHours: number[] }>();
+    const keys: string[] = [];
+    for (let k = from; k <= to; k = dateKey(new Date(toDate(k).getTime() + 86_400_000))) keys.push(k);
+    for (const id of employeeIds) {
+      const employee = employees.get(id);
+      if (!employee) continue;
+      const schedule = await this.scheduleOf(id, cache);
+      const holidays = this.holidaysFor(employee, holidayRows, ancestors);
+      for (const k of keys) {
+        const required = holidays.has(k) ? 0 : (schedule?.required[toDate(k).getUTCDay()] ?? 0);
+        result.set(`${id}|${k}`, required);
+      }
+    }
+    return result;
+  }
+
   // Synthese par employe sur une periode (heures prevues, travaillees, heures
   // supplementaires, absences, heures payees par code). employeeIds = null pour
   // tous les employes actifs. Lignes de calcul etroites : leur nombre est borne
@@ -555,7 +605,7 @@ export class TimeCalculationService {
     const [days, overtime] = await Promise.all([
       this.prisma.timeDailyHours.findMany({
         where: { Date: { gte: toDate(from), lte: toDate(to) } },
-        select: { EmployeeId: true, WorkedHours: true, RequiredHours: true },
+        select: { EmployeeId: true, Date: true, WorkedHours: true },
       }),
       this.prisma.timeOvertime.findMany({
         where: { Date: { gte: toDate(from), lte: toDate(to) } },
@@ -568,15 +618,21 @@ export class TimeCalculationService {
       if (!r) acc.set(id, (r = { required: 0, worked: 0, overtime: 0, absence: 0, paidOvertime: 0 }));
       return r;
     };
+    const requiredMap = await this.requiredPerDay(employees.map((e) => e.Id), from, to);
+    const workedMap = new Map<string, number>();
     for (const d of days) {
-      if (!wanted.has(d.EmployeeId)) continue;
-      const required = Number(d.RequiredHours);
-      const worked = Number(d.WorkedHours);
-      const r = row(d.EmployeeId);
-      r.required += required;
-      r.worked += worked;
-      r.overtime += Math.max(0, worked - required);
-      r.absence += Math.max(0, required - worked);
+      if (wanted.has(d.EmployeeId)) workedMap.set(`${d.EmployeeId}|${dateKey(d.Date)}`, Number(d.WorkedHours));
+    }
+    for (const e of employees) {
+      const r = row(e.Id);
+      for (let k = from; k <= to; k = dateKey(new Date(toDate(k).getTime() + 86_400_000))) {
+        const required = requiredMap.get(`${e.Id}|${k}`) ?? 0;
+        const worked = workedMap.get(`${e.Id}|${k}`) ?? 0;
+        r.required += required;
+        r.worked += worked;
+        r.overtime += Math.max(0, worked - required);
+        r.absence += Math.max(0, required - worked);
+      }
     }
     for (const o of overtime) {
       if (wanted.has(o.EmployeeId)) row(o.EmployeeId).paidOvertime += Number(o.Hours);
@@ -610,11 +666,13 @@ export class TimeCalculationService {
 
   async timesheet(employeeId: string, from: string, to: string) {
     assertRange(from, to);
-    const employee = await this.prisma.employee.findUnique({
+    const found = await this.prisma.employee.findUnique({
       where: { Id: employeeId },
-      select: { Id: true, FullName: true, EmployeeNumber: true },
+      select: { Id: true, FullName: true, EmployeeNumber: true, organizationUnit: { select: { Name: true } } },
     });
-    if (!employee) throw new BadRequestException('Employé introuvable');
+    if (!found) throw new BadRequestException('Employé introuvable');
+    // Service = entite de rattachement (affiche sur la feuille de temps en PDF).
+    const employee = { Id: found.Id, FullName: found.FullName, EmployeeNumber: found.EmployeeNumber, Service: found.organizationUnit?.Name ?? null };
     const [days, clocks] = await Promise.all([
       this.prisma.timeDailyHours.findMany({ where: { EmployeeId: employeeId, Date: { gte: toDate(from), lte: toDate(to) } } }),
       this.prisma.timeMorphoRecord.findMany({
@@ -633,17 +691,20 @@ export class TimeCalculationService {
         if (c.DernierPointage > e.out) e.out = c.DernierPointage;
       }
     }
+    const requiredMap = await this.requiredPerDay([employeeId], from, to);
+    const raw: { required: number; worked: number; overtime: number; absence: number }[] = [];
     const rows: { date: string; required: number; worked: number; overtime: number; absence: number; in: string | null; out: string | null }[] = [];
     let cursor = from;
     while (cursor <= to) {
       const d = dayByKey.get(cursor);
-      const required = d ? Number(d.RequiredHours) : 0;
+      const required = requiredMap.get(`${employeeId}|${cursor}`) ?? 0;
       const worked = d ? Number(d.WorkedHours) : 0;
       const c = clockByKey.get(cursor);
+      raw.push({ required, worked, overtime: Math.max(0, worked - required), absence: Math.max(0, required - worked) });
       rows.push({
         date: cursor,
-        required,
-        worked,
+        required: round2(required),
+        worked: round2(worked),
         overtime: round2(Math.max(0, worked - required)),
         absence: round2(Math.max(0, required - worked)),
         in: c ? c.in.toISOString() : null,
@@ -651,7 +712,8 @@ export class TimeCalculationService {
       });
       cursor = dateKey(new Date(toDate(cursor).getTime() + 86_400_000));
     }
-    const sum = (f: (r: (typeof rows)[number]) => number) => round2(rows.reduce((s, r) => s + f(r), 0));
+    // Totaux sur les valeurs non arrondies puis arrondis une seule fois (comme Pointage).
+    const sum = (f: (r: (typeof raw)[number]) => number) => round2(raw.reduce((s, r) => s + f(r), 0));
     return {
       employee,
       period: { from, to },

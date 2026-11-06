@@ -2203,8 +2203,9 @@ model TimeDailyHours {
   Id            String   @id @default(uuid()) @db.UniqueIdentifier
   EmployeeId    String   @db.UniqueIdentifier
   Date          DateTime @db.Date
-  WorkedHours   Decimal  @db.Decimal(6, 2)
-  RequiredHours Decimal  @db.Decimal(6, 2)
+  // Flottants comme dans le systeme Pointage : aucune perte a l'enregistrement, on arrondit a l'affichage.
+  WorkedHours   Float
+  RequiredHours Float
 
   employee Employee @relation(fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -2218,7 +2219,7 @@ model TimeOvertime {
   EmployeeId String   @db.UniqueIdentifier
   CodeId     String   @db.UniqueIdentifier
   Date       DateTime @db.Date
-  Hours      Decimal  @db.Decimal(6, 2)
+  Hours      Float
 
   employee Employee           @relation(fields: [EmployeeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   code     TimeAttendanceCode @relation(fields: [CodeId], references: [Id], onDelete: NoAction, onUpdate: NoAction)

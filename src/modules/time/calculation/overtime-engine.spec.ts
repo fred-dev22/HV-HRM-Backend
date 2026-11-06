@@ -35,7 +35,8 @@ const run = (days: DayHours[], extra: Partial<Parameters<typeof computeOvertimeL
     days,
     clocks: [],
     holidays: new Set(),
-    settings: DEFAULT_TIME_SETTINGS,
+    // Ces tests couvrent le plafond propre a un employe ; le plafond partage est teste a part.
+    settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapCompanyWide: false },
     method: 'daily',
     from: MON,
     to: SUN,
@@ -113,7 +114,7 @@ describe('computeDailyHours', () => {
 describe('heures supplementaires, methode journaliere', () => {
   it('repartit 8 h a 130 % puis 150 % sur la semaine (avant plafond NI)', () => {
     const lines = run([day(MON, 10), day(TUE, 14), day(WED, 11)], {
-      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0 },
+      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0, monthlyNiCapCompanyWide: false },
     });
     expect(lines.filter((l) => l.category === 'HS01').map((l) => [l.dateKey, l.hours])).toEqual([
       [MON, 2],
@@ -132,7 +133,7 @@ describe('heures supplementaires, methode journaliere', () => {
 
   it('scinde une ligne quand le plafond tombe en son milieu', () => {
     const lines = run([day(MON, 10), day(TUE, 14), day(WED, 11)], {
-      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 5 },
+      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 5, monthlyNiCapCompanyWide: false },
     });
     expect(sum(lines, 'HS03')).toBe(5);
     expect(sum(lines, 'HS01')).toBe(3);
@@ -147,7 +148,7 @@ describe('heures supplementaires, methode journaliere', () => {
   it('le cumul hebdomadaire repart a zero la semaine suivante', () => {
     const nextMon = '2026-01-12';
     const lines = run([day(THU, 16), day(nextMon, 10)], {
-      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0 },
+      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0, monthlyNiCapCompanyWide: false },
       to: '2026-01-18',
     });
     // Jeudi : 8 h supp -> tout HS01 ; lundi suivant : 2 h supp -> HS01 de nouveau.
@@ -158,7 +159,7 @@ describe('heures supplementaires, methode journaliere', () => {
   });
 
   it('un dimanche donne HS10 sur toutes les heures et sort du pool', () => {
-    const lines = run([day(SUN, 5, 0), day(MON, 10)], { settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0 } });
+    const lines = run([day(SUN, 5, 0), day(MON, 10)], { settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0, monthlyNiCapCompanyWide: false } });
     expect(sum(lines, 'HS10')).toBe(5);
     expect(sum(lines, 'HS01')).toBe(2);
   });
@@ -180,7 +181,7 @@ describe('heures supplementaires, methode journaliere', () => {
 
   it('traite chaque employe separement', () => {
     const lines = run([day(MON, 10, 8, 'E1'), day(MON, 9, 8, 'E2')], {
-      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0 },
+      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0, monthlyNiCapCompanyWide: false },
     });
     expect(lines.find((l) => l.employeeId === 'E1')!.hours).toBe(2);
     expect(lines.find((l) => l.employeeId === 'E2')!.hours).toBe(1);
@@ -193,7 +194,7 @@ describe('heures supplementaires, methode hebdomadaire', () => {
   it('declenche au-dela de 40 h et date la ligne du dimanche de fin de semaine', () => {
     const lines = run(fullWeek, {
       method: 'weekly',
-      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0 },
+      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0, monthlyNiCapCompanyWide: false },
     });
     expect(lines).toEqual([{ employeeId: 'E1', dateKey: SUN, hours: 5, category: 'HS01' }]);
   });
@@ -201,7 +202,7 @@ describe('heures supplementaires, methode hebdomadaire', () => {
   it('au-dela de 8 h supp, le reste passe a 150 %', () => {
     const lines = run([...fullWeek, day(SAT, 6, 0)], {
       method: 'weekly',
-      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0 },
+      settings: { ...DEFAULT_TIME_SETTINGS, monthlyNiCapHours: 0, monthlyNiCapCompanyWide: false },
     });
     // 51 h -> 11 h supp : 8 a 130 %, 3 a 150 %.
     expect(sum(lines, 'HS01')).toBe(8);
@@ -291,6 +292,17 @@ describe('applyMonthlyNiCap : plafond par employe', () => {
     const ni = (id: string) => lines.filter((l) => l.employeeId === id && l.category === 'HS03').reduce((s, l) => s + l.hours, 0);
     expect(ni('a')).toBe(15);
     expect(ni('b')).toBe(15);
+  });
+
+  it('plafond partage par toute l entreprise : consomme par date puis par employe', () => {
+    const lines: OvertimeLine[] = [
+      { employeeId: 'a', dateKey: '2026-01-05', hours: 15, category: 'HS01' },
+      { employeeId: 'b', dateKey: '2026-01-06', hours: 15, category: 'HS01' },
+    ];
+    applyMonthlyNiCap(lines, 20, true);
+    const ni = (id: string) => lines.filter((l) => l.employeeId === id && l.category === 'HS03').reduce((s, l) => s + l.hours, 0);
+    expect(ni('a')).toBe(15);
+    expect(ni('b')).toBe(5);
   });
 });
 

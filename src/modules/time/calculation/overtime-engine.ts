@@ -42,6 +42,8 @@ export interface TimeCalcSettings {
   nightEndHour: number;
   weeklyHs01ThresholdHours: number;
   monthlyNiCapHours: number;
+  // 1 = plafond partage par toute l'entreprise (comme le systeme Pointage), 0 = propre a chaque employe.
+  monthlyNiCapCompanyWide: boolean;
 }
 
 // Valeurs d'usine, identiques au seed (TIME_SETTINGS).
@@ -51,6 +53,7 @@ export const DEFAULT_TIME_SETTINGS: TimeCalcSettings = {
   nightEndHour: 5,
   weeklyHs01ThresholdHours: 8,
   monthlyNiCapHours: 20,
+  monthlyNiCapCompanyWide: true,
 };
 
 // Seuil hebdomadaire de la methode 'weekly' (code en dur dans le systeme
@@ -213,17 +216,23 @@ export interface OvertimeInput {
 // Plafond mensuel non imposable : consomme du plus ancien au plus recent, par
 // mois calendaire, sur HS01/HS02 uniquement (converties en HS03/HS04). Une
 // ligne est scindee si le plafond tombe en son milieu. Modifie `lines`.
-export function applyMonthlyNiCap(lines: OvertimeLine[], monthlyCapHours: number): void {
+export function applyMonthlyNiCap(lines: OvertimeLine[], monthlyCapHours: number, companyWide = false, rank?: Map<string, number>): void {
   const byMonth = new Map<string, OvertimeLine[]>();
   for (const line of lines) {
     if (line.category !== 'HS01' && line.category !== 'HS02') continue;
-    // Plafond propre a chaque employe : jamais partage entre deux employes.
-    const key = `${line.employeeId}|${line.dateKey.slice(0, 7)}`;
+    // Portee du plafond : toute l'entreprise (comme Pointage) ou chaque employe.
+    const month = line.dateKey.slice(0, 7);
+    const key = companyWide ? month : `${line.employeeId}|${month}`;
     if (!byMonth.has(key)) byMonth.set(key, []);
     byMonth.get(key)!.push(line);
   }
   for (const monthLines of byMonth.values()) {
-    monthLines.sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+    monthLines.sort((a, b) =>
+      a.dateKey !== b.dateKey
+        ? a.dateKey < b.dateKey ? -1 : 1
+        : (rank?.get(a.employeeId) ?? 0) - (rank?.get(b.employeeId) ?? 0) ||
+          (a.employeeId < b.employeeId ? -1 : a.employeeId > b.employeeId ? 1 : 0),
+    );
     let remaining = monthlyCapHours;
     for (const line of monthLines) {
       if (remaining <= 0) break;
@@ -323,8 +332,9 @@ export function computeOvertimeLines(input: OvertimeInput): OvertimeLine[] {
     }
   }
 
-  applyMonthlyNiCap(lines, settings.monthlyNiCapHours);
-  return lines.map((l) => ({ ...l, hours: round2(l.hours) }));
+  // Plafond partage par l'entreprise : applique par l'appelant, une fois toutes les lignes de tous les employes connues.
+  if (!settings.monthlyNiCapCompanyWide) applyMonthlyNiCap(lines, settings.monthlyNiCapHours, false);
+  return lines;
 }
 
 // Paniers : un par employe et par jour, auto-calcule sur la duree travaillee
