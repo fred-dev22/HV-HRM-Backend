@@ -40,6 +40,8 @@ export interface OvertimeResult {
   // Methode effectivement utilisee (journaliere ou hebdomadaire).
   method: OvertimeMethod;
   period: { from: string; to: string };
+  // Present quand le calcul ne porte que sur un code (mode par code).
+  code?: string;
 }
 
 interface EmployeeContext {
@@ -355,7 +357,7 @@ export class TimeCalculationService {
     return { dailyRows, overtimeRows };
   }
 
-  async calculateOvertime(from: string, to: string, requestedMethod?: OvertimeMethod): Promise<OvertimeResult> {
+  async calculateOvertime(from: string, to: string, requestedMethod?: OvertimeMethod, onlyCode?: string): Promise<OvertimeResult> {
     assertRange(from, to);
     if ((await this.calculationStatus(from, to)).dailyRows === 0) {
       throw new BadRequestException("Aucune heure journalière calculée sur cette période. Lancez d'abord le calcul T4.");
@@ -464,8 +466,19 @@ export class TimeCalculationService {
       out.push(...rest, ...hs.map((l) => ({ employeeId: l.employeeId, dateKey: l.dateKey, code: l.category as string, hours: l.hours })));
     }
 
+    // Mode par code : memes regles que le calcul general (le plafond non imposable compte), mais on ne
+    // remplace que les lignes du code demande, pour ne pas ecraser les autres codes deja calcules.
+    if (onlyCode) {
+      if (!codeId.has(onlyCode)) throw new BadRequestException(`Code de paie introuvable : ${onlyCode}`);
+      const kept = out.filter((o) => o.code === onlyCode);
+      out.length = 0;
+      out.push(...kept);
+    }
+
     await this.prisma.$transaction(async (tx) => {
-      await tx.timeOvertime.deleteMany({ where: { Date: { gte: toDate(from), lte: toDate(to) } } });
+      await tx.timeOvertime.deleteMany({
+        where: { Date: { gte: toDate(from), lte: toDate(to) }, ...(onlyCode ? { CodeId: codeId.get(onlyCode) } : {}) },
+      });
       for (let i = 0; i < out.length; i += 500) {
         await tx.timeOvertime.createMany({
           data: out.slice(i, i + 500).map((l) => ({
@@ -481,7 +494,7 @@ export class TimeCalculationService {
 
     const breakdown: Record<string, number> = {};
     for (const l of out) breakdown[l.code] = round2((breakdown[l.code] ?? 0) + round2(l.hours));
-    return { calculated: out.length, excludedCadres, breakdown, method, period: { from, to } };
+    return { calculated: out.length, excludedCadres, breakdown, method, period: { from, to }, ...(onlyCode ? { code: onlyCode } : {}) };
   }
 
   // ── Lecture : rapport et export Sage ──────────────────────────────────────

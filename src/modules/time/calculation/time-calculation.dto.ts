@@ -13,6 +13,12 @@ export class CalculateOvertimeDto extends PeriodDto {
   @IsOptional()
   @IsIn(['daily', 'weekly'])
   Method?: 'daily' | 'weekly';
+
+  // Mode par code : ne recalcule que ce code de paie (ex. HS10), les autres codes de la periode restent intacts.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  Code?: string;
 }
 
 export class CalculateDailyHoursDto extends PeriodDto {
