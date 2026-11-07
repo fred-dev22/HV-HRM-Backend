@@ -49,14 +49,17 @@ INSERT INTO [dbo].[Permission] ([Id], [Code], [Label], [Module]) VALUES
     (NEWID(), N'CONGE_VOIR_TOUT', N'Voir toutes les demandes de congé', N'Congés'),
     (NEWID(), N'CONGE_VALIDER', N'Valider / rejeter une demande de congé', N'Congés'),
     (NEWID(), N'CONGE_SUPPRIMER', N'Supprimer définitivement une demande de congé', N'Congés'),
+    (NEWID(), N'CONGE_CREER_POUR_AUTRE', N'Créer une demande de congé pour un autre employé', N'Congés'),
     (NEWID(), N'MISSION_VOIR_EQUIPE', N'Voir les ordres de mission de son équipe', N'Missions'),
     (NEWID(), N'MISSION_VOIR_TOUT', N'Voir tous les ordres de mission', N'Missions'),
     (NEWID(), N'MISSION_VALIDER', N'Valider / rejeter un ordre de mission', N'Missions'),
     (NEWID(), N'MISSION_SUPPRIMER', N'Supprimer définitivement un ordre de mission', N'Missions'),
+    (NEWID(), N'MISSION_CREER_POUR_AUTRE', N'Créer un ordre de mission pour un autre employé', N'Missions'),
     (NEWID(), N'FRAIS_VOIR_EQUIPE', N'Voir les notes de frais de son équipe', N'Notes de frais'),
     (NEWID(), N'FRAIS_VOIR_TOUT', N'Voir toutes les notes de frais', N'Notes de frais'),
     (NEWID(), N'FRAIS_VALIDER', N'Valider / rejeter une note de frais', N'Notes de frais'),
     (NEWID(), N'FRAIS_SUPPRIMER', N'Supprimer définitivement une note de frais', N'Notes de frais'),
+    (NEWID(), N'FRAIS_CREER_POUR_AUTRE', N'Créer une note de frais pour un autre employé', N'Notes de frais'),
     (NEWID(), N'EMPLOYE_VOIR_EQUIPE', N'Voir la fiche des employés de son équipe', N'Employés'),
     (NEWID(), N'EMPLOYE_VOIR_TOUT', N'Voir la fiche de tous les employés', N'Employés'),
     (NEWID(), N'EMPLOYE_CREER', N'Créer un employé', N'Employés'),
@@ -83,7 +86,11 @@ INSERT INTO [dbo].[Permission] ([Id], [Code], [Label], [Module]) VALUES
     (NEWID(), N'RAPPORT_EXPORTER', N'Exporter les rapports', N'Rapports'),
     (NEWID(), N'RECRUTEMENT_ACCES', N'Accéder au module Recrutement (tout faire)', N'Recrutement'),
     (NEWID(), N'RECRUTEMENT_BESOIN_VOIR', N'Voir les expressions de besoin en recrutement', N'Administration'),
-    (NEWID(), N'RECRUTEMENT_BESOIN_EXPRIMER', N'Exprimer un besoin en recrutement', N'Administration');
+    (NEWID(), N'RECRUTEMENT_BESOIN_EXPRIMER', N'Exprimer un besoin en recrutement', N'Administration'),
+    (NEWID(), N'FORMATION_ACCES', N'Accéder au module Formation (tout faire)', N'Formation'),
+    (NEWID(), N'TEMPS_ACCES', N'Accéder au module Temps de travail (tout faire)', N'Temps de travail'),
+    (NEWID(), N'TEMPS_SAISIR', N'Saisir ses temps (missions, réunions, panier, permanence)', N'Administration'),
+    (NEWID(), N'TEMPS_VALIDER', N'Valider les saisies de temps de son équipe', N'Administration');
 
 -- ── 2. Cycle de bootstrap ─────────────────────────────────────────────
 -- OrganizationUnit.CreatedBy, EmployeeCategory.CreatedBy et
@@ -110,10 +117,14 @@ INSERT INTO [dbo].[EmployeeCategory] ([Id], [Code], [Name], [IsActive], [Created
     (@cat_DIRECTEUR_RH, N'DIRECTEUR-RH', N'Directeur RH', 1, @adminEmployee);
 
 -- ── 4. Permissions attachees a chaque categorie ───────────────────────
--- Employé : aucune permission (employe standard — acces a ses propres
--- demandes uniquement, ce qui ne requiert aucun code de permission).
+-- Employé (1 permissions)
+INSERT INTO [dbo].[CategoryPermission] ([Id], [EmployeeCategoryId], [PermissionId], [CreatedBy])
+SELECT NEWID(), @cat_EMPLOYE, [Id], @adminEmployee
+FROM [dbo].[Permission] WHERE [Code] IN (
+    N'TEMPS_SAISIR'
+);
 
--- Manager (9 permissions)
+-- Manager (11 permissions)
 INSERT INTO [dbo].[CategoryPermission] ([Id], [EmployeeCategoryId], [PermissionId], [CreatedBy])
 SELECT NEWID(), @cat_MANAGER, [Id], @adminEmployee
 FROM [dbo].[Permission] WHERE [Code] IN (
@@ -125,10 +136,12 @@ FROM [dbo].[Permission] WHERE [Code] IN (
     N'FRAIS_VALIDER',
     N'EMPLOYE_VOIR_EQUIPE',
     N'RECRUTEMENT_BESOIN_VOIR',
-    N'RECRUTEMENT_BESOIN_EXPRIMER'
+    N'RECRUTEMENT_BESOIN_EXPRIMER',
+    N'TEMPS_SAISIR',
+    N'TEMPS_VALIDER'
 );
 
--- Admin RH (30 permissions)
+-- Admin RH (37 permissions)
 INSERT INTO [dbo].[CategoryPermission] ([Id], [EmployeeCategoryId], [PermissionId], [CreatedBy])
 SELECT NEWID(), @cat_ADMIN_RH, [Id], @adminEmployee
 FROM [dbo].[Permission] WHERE [Code] IN (
@@ -141,45 +154,14 @@ FROM [dbo].[Permission] WHERE [Code] IN (
     N'EMPLOYE_VOIR_EQUIPE',
     N'RECRUTEMENT_BESOIN_VOIR',
     N'RECRUTEMENT_BESOIN_EXPRIMER',
+    N'TEMPS_SAISIR',
+    N'TEMPS_VALIDER',
     N'CONGE_VOIR_TOUT',
     N'MISSION_VOIR_TOUT',
     N'FRAIS_VOIR_TOUT',
-    N'EMPLOYE_VOIR_TOUT',
-    N'EMPLOYE_CREER',
-    N'EMPLOYE_MODIFIER',
-    N'EMPLOYE_DESACTIVER',
-    N'EMPLOYE_COMPTE_CREER',
-    N'ENTITE_VOIR',
-    N'ENTITE_CREER',
-    N'ENTITE_MODIFIER',
-    N'ENTITE_SOUMETTRE',
-    N'CONFIG_CALENDRIER',
-    N'CONFIG_JOURS_FERIES',
-    N'CONFIG_TYPES_CONGE',
-    N'CONFIG_CATEGORIES_EMPLOYE',
-    N'CONFIG_FRAIS_MISSION',
-    N'CONFIG_METIERS_POSTES',
-    N'RAPPORT_VOIR',
-    N'RAPPORT_EXPORTER',
-    N'RECRUTEMENT_ACCES'
-);
-
--- Directeur RH (39 permissions)
-INSERT INTO [dbo].[CategoryPermission] ([Id], [EmployeeCategoryId], [PermissionId], [CreatedBy])
-SELECT NEWID(), @cat_DIRECTEUR_RH, [Id], @adminEmployee
-FROM [dbo].[Permission] WHERE [Code] IN (
-    N'CONGE_VOIR_EQUIPE',
-    N'CONGE_VALIDER',
-    N'MISSION_VOIR_EQUIPE',
-    N'MISSION_VALIDER',
-    N'FRAIS_VOIR_EQUIPE',
-    N'FRAIS_VALIDER',
-    N'EMPLOYE_VOIR_EQUIPE',
-    N'RECRUTEMENT_BESOIN_VOIR',
-    N'RECRUTEMENT_BESOIN_EXPRIMER',
-    N'CONGE_VOIR_TOUT',
-    N'MISSION_VOIR_TOUT',
-    N'FRAIS_VOIR_TOUT',
+    N'CONGE_CREER_POUR_AUTRE',
+    N'MISSION_CREER_POUR_AUTRE',
+    N'FRAIS_CREER_POUR_AUTRE',
     N'EMPLOYE_VOIR_TOUT',
     N'EMPLOYE_CREER',
     N'EMPLOYE_MODIFIER',
@@ -198,6 +180,51 @@ FROM [dbo].[Permission] WHERE [Code] IN (
     N'RAPPORT_VOIR',
     N'RAPPORT_EXPORTER',
     N'RECRUTEMENT_ACCES',
+    N'FORMATION_ACCES',
+    N'TEMPS_ACCES'
+);
+
+-- Directeur RH (46 permissions)
+INSERT INTO [dbo].[CategoryPermission] ([Id], [EmployeeCategoryId], [PermissionId], [CreatedBy])
+SELECT NEWID(), @cat_DIRECTEUR_RH, [Id], @adminEmployee
+FROM [dbo].[Permission] WHERE [Code] IN (
+    N'CONGE_VOIR_EQUIPE',
+    N'CONGE_VALIDER',
+    N'MISSION_VOIR_EQUIPE',
+    N'MISSION_VALIDER',
+    N'FRAIS_VOIR_EQUIPE',
+    N'FRAIS_VALIDER',
+    N'EMPLOYE_VOIR_EQUIPE',
+    N'RECRUTEMENT_BESOIN_VOIR',
+    N'RECRUTEMENT_BESOIN_EXPRIMER',
+    N'TEMPS_SAISIR',
+    N'TEMPS_VALIDER',
+    N'CONGE_VOIR_TOUT',
+    N'MISSION_VOIR_TOUT',
+    N'FRAIS_VOIR_TOUT',
+    N'CONGE_CREER_POUR_AUTRE',
+    N'MISSION_CREER_POUR_AUTRE',
+    N'FRAIS_CREER_POUR_AUTRE',
+    N'EMPLOYE_VOIR_TOUT',
+    N'EMPLOYE_CREER',
+    N'EMPLOYE_MODIFIER',
+    N'EMPLOYE_DESACTIVER',
+    N'EMPLOYE_COMPTE_CREER',
+    N'ENTITE_VOIR',
+    N'ENTITE_CREER',
+    N'ENTITE_MODIFIER',
+    N'ENTITE_SOUMETTRE',
+    N'CONFIG_CALENDRIER',
+    N'CONFIG_JOURS_FERIES',
+    N'CONFIG_TYPES_CONGE',
+    N'CONFIG_CATEGORIES_EMPLOYE',
+    N'CONFIG_FRAIS_MISSION',
+    N'CONFIG_METIERS_POSTES',
+    N'RAPPORT_VOIR',
+    N'RAPPORT_EXPORTER',
+    N'RECRUTEMENT_ACCES',
+    N'FORMATION_ACCES',
+    N'TEMPS_ACCES',
     N'ENTITE_APPROUVER',
     N'ENTITE_DESACTIVER',
     N'EMPLOYE_PERMISSION_GERER',
@@ -217,11 +244,11 @@ INSERT INTO [dbo].[OrganizationUnit] ([Id], [Code], [Name], [Type], [Status], [C
 VALUES (@rootOrgUnit, N'DG', N'Direction Generale', N'Direction', N'Active', @adminEmployee);
 
 -- ── 6. Compte administrateur initial ──────────────────────────────────
--- Identifiants : admin@hv.com / Admin@2026!
+-- Identifiants : admin@example.com / Admin@2026!
 -- MustChangePassword = 1 : le mot de passe ci-dessus est temporaire et
 -- devra etre change des la premiere connexion.
 INSERT INTO [dbo].[User] ([Id], [Username], [Email], [PasswordHash], [IsActive], [MustChangePassword], [EmployeeCategoryId])
-VALUES (@adminUser, N'admin', N'admin@hv.com', N'$2b$10$od7DMKWpzOxFLgO3SRn6nOe98iteAqCJuHP8JZWgczMcPApUfLT0a', 1, 1, @cat_DIRECTEUR_RH);
+VALUES (@adminUser, N'admin', N'admin@example.com', N'$2b$10$od7DMKWpzOxFLgO3SRn6nOe98iteAqCJuHP8JZWgczMcPApUfLT0a', 1, 1, @cat_DIRECTEUR_RH);
 
 -- IsSystem = 1 : compte d'amorcage, jamais propose comme option dans un
 -- selecteur (beneficiaire, interimaire, validateur, responsable...).
@@ -230,8 +257,8 @@ INSERT INTO [dbo].[Employee] (
     [MaritalStatus], [IdType], [Email], [ContractType], [HireDate],
     [OrganizationUnitId], [UserId], [Status], [IsSystem], [CreatedBy]
 ) VALUES (
-    @adminEmployee, N'HV-0001', N'Admin', N'HV', N'Admin HV', N'M', '1990-01-01',
-    N'Single', N'NationalId', N'admin@hv.com', N'Permanent', CAST(GETDATE() AS DATE),
+    @adminEmployee, N'CONGEL-0001', N'Admin', N'Congélo', N'Admin Congélo', N'M', '1990-01-01',
+    N'Single', N'NationalId', N'admin@example.com', N'Permanent', CAST(GETDATE() AS DATE),
     @rootOrgUnit, @adminUser, N'Active', 1, @adminEmployee
 );
 
@@ -250,7 +277,45 @@ FROM [dbo].[CategoryPermission] WHERE [EmployeeCategoryId] = @cat_DIRECTEUR_RH;
 INSERT INTO [dbo].[ExpenseType] ([Id], [Code], [Name], [Unit], [IsActive], [IsSystem], [CreatedBy])
 VALUES (NEWID(), N'AUTRE', N'Autre', N'PerItem', 1, 1, @adminEmployee);
 
--- ── 9. Reactivation des contraintes ───────────────────────────────────
+-- ── 9. Temps de travail : codes de paie, reglages, tarifs ──────────────
+-- Types et codes de paie (Sage), parametres du calcul des heures, tarifs de
+-- permanence. Valeurs d'usine, modifiables ensuite depuis les reglages.
+DECLARE @timeType_Heures_Suppl_mentaires UNIQUEIDENTIFIER = NEWID();
+INSERT INTO [dbo].[TimeAttendanceType] ([Id], [Name], [Description], [SageTypeCode])
+VALUES (@timeType_Heures_Suppl_mentaires, N'Heures Supplémentaires', N'Il s''agit des heures travaillées en dehors des 40 heures hebdomadaires prévues', 255);
+INSERT INTO [dbo].[TimeAttendanceCode] ([Id], [TypeId], [Code]) VALUES
+    (NEWID(), @timeType_Heures_Suppl_mentaires, N'HS01'),
+    (NEWID(), @timeType_Heures_Suppl_mentaires, N'HS02'),
+    (NEWID(), @timeType_Heures_Suppl_mentaires, N'HS03'),
+    (NEWID(), @timeType_Heures_Suppl_mentaires, N'HS04'),
+    (NEWID(), @timeType_Heures_Suppl_mentaires, N'HS09'),
+    (NEWID(), @timeType_Heures_Suppl_mentaires, N'HS10');
+DECLARE @timeType_Panier UNIQUEIDENTIFIER = NEWID();
+INSERT INTO [dbo].[TimeAttendanceType] ([Id], [Name], [Description], [SageTypeCode])
+VALUES (@timeType_Panier, N'Panier', N'8 heures de travail continu sur une journée constituent un panier', 0);
+INSERT INTO [dbo].[TimeAttendanceCode] ([Id], [TypeId], [Code]) VALUES
+    (NEWID(), @timeType_Panier, N'30900');
+DECLARE @timeType_Permanence UNIQUEIDENTIFIER = NEWID();
+INSERT INTO [dbo].[TimeAttendanceType] ([Id], [Name], [Description], [SageTypeCode])
+VALUES (@timeType_Permanence, N'Permanence', NULL, 3);
+INSERT INTO [dbo].[TimeAttendanceCode] ([Id], [TypeId], [Code]) VALUES
+    (NEWID(), @timeType_Permanence, N'2210');
+INSERT INTO [dbo].[TimeSetting] ([Id], [Key], [Value], [Label]) VALUES
+    (NEWID(), N'panier_min_hours', 8, N'Durée continue minimale pour un Panier (heures)'),
+    (NEWID(), N'night_window_start_hour', 22, N'Début de la fenêtre de nuit'),
+    (NEWID(), N'night_window_end_hour', 5, N'Fin de la fenêtre de nuit'),
+    (NEWID(), N'weekly_hs01_threshold_hours', 8, N'Seuil hebdomadaire HS01/HS02'),
+    (NEWID(), N'monthly_ni_cap_hours', 20, N'Plafond mensuel non imposable HS03/HS04'),
+    (NEWID(), N'monthly_ni_cap_company_wide', 1, N'Plafond non imposable partagé par toute l''entreprise (1 = oui)'),
+    (NEWID(), N'overtime_method', 0, N'Méthode de calcul des heures supplémentaires'),
+    (NEWID(), N'deduct_break', 0, N'Retirer la pause du temps travaillé (1 = oui)'),
+    (NEWID(), N'include_non_working_days', 0, N'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)');
+INSERT INTO [dbo].[TimePermanenceRate] ([Id], [DayType], [Amount]) VALUES
+    (NEWID(), N'OUVRABLE', 5000),
+    (NEWID(), N'SAMEDI', 8000),
+    (NEWID(), N'DIMANCHE_FERIE', 9000);
+
+-- ── 10. Reactivation des contraintes ──────────────────────────────────
 -- WITH CHECK : SQL Server revalide les lignes inserees ci-dessus. Si l'une
 -- d'elles violait la contrainte, ces instructions echouent et toute la
 -- transaction est annulee — c'est notre filet de securite.

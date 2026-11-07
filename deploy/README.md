@@ -93,8 +93,23 @@ Il n'y a jamais de script de mise à jour à lui passer. Les deux fichiers se
 régénèrent à chaque livraison (`npm run client:new -- ... --with-sql`), donc tout
 changement de schéma ou de données d'amorçage doit être fait dans
 `schema.prisma` / `seed-data.ts` : il se retrouve alors tout seul dans les deux
-scripts. Les scripts `NN-update.sql` (par exemple `v1.1.0/03-update.sql`) ne servent
-qu'aux clients **déjà installés**, pour les faire passer de leur version à la suivante.
+scripts. Les scripts `NN-update.sql` ne servent qu'aux clients **déjà installés**,
+pour les faire passer de leur version à la suivante : tant qu'un client n'est installé
+nulle part, on n'en crée pas, tout va dans le schéma et le seed.
+
+### Une branche par client
+
+`qa` reste l'application générique, sans rien de propre à un client. Quand un client
+est lancé (par exemple GRT), on crée sa branche à partir de `qa` :
+
+```bash
+git checkout qa
+git checkout -b grt
+```
+
+Tout ce qui lui est propre vit ensuite sur cette branche : ses scripts SQL de mise à
+jour, la capture `prisma/deployed/grt.prisma`, ses ajustements. Les évolutions
+générales se font sur `qa` puis se fusionnent dans les branches clients.
 
 Avant chaque livraison :
 
@@ -108,8 +123,9 @@ une colonne, une permission ou une catégorie du code manque dans l'un des deux.
 ## Contenu
 
 ```
-deploy/hv/v1.0.0/01-schema.sql   structure (30 tables) — 1 seule fois
+deploy/hv/v1.0.0/01-schema.sql   structure (66 tables) — 1 seule fois
 deploy/hv/v1.0.0/02-seed.sql     données d'amorçage    — 1 seule fois
+                                 (permissions, catégories, admin, codes de paie et réglages du Temps)
 prisma/deployed/hv.prisma        capture du schéma déployé (référence)
 ```
 
@@ -163,7 +179,7 @@ schéma. La référence est le fichier `prisma/deployed/<client>.prisma`, miroir
 de ce que le client a réellement en base.
 
 ```bash
-npx ts-node prisma/export-schema-sql.ts deploy/hv/v1.1.0/03-update.sql --from prisma/deployed/hv.prisma
+npx ts-node prisma/export-schema-sql.ts deploy/<client>/vX.Y.Z/NN-update.sql --from prisma/deployed/<client>.prisma
 ```
 
 Puis, **une fois seulement que le client a confirmé l'application** du script :

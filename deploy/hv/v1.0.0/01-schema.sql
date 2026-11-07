@@ -94,6 +94,8 @@ CREATE TABLE [dbo].[Employee] (
     [IsExpatriate] BIT NOT NULL CONSTRAINT [Employee_IsExpatriate_df] DEFAULT 0,
     [IsSystem] BIT NOT NULL CONSTRAINT [Employee_IsSystem_df] DEFAULT 0,
     [DirectValidatorId] UNIQUEIDENTIFIER,
+    [IsCadre] BIT NOT NULL CONSTRAINT [Employee_IsCadre_df] DEFAULT 0,
+    [BiometricUuid] NVARCHAR(100),
     [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
     [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [Employee_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
     [ModifiedBy] UNIQUEIDENTIFIER,
@@ -230,6 +232,7 @@ CREATE TABLE [dbo].[Calendar] (
     [Name] NVARCHAR(100) NOT NULL,
     [IsDefault] BIT NOT NULL CONSTRAINT [Calendar_IsDefault_df] DEFAULT 0,
     [EmployeeCategoryId] UNIQUEIDENTIFIER,
+    [EmployeeId] UNIQUEIDENTIFIER,
     [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
     [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [Calendar_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
     [ModifiedBy] UNIQUEIDENTIFIER,
@@ -289,6 +292,9 @@ CREATE TABLE [dbo].[LeaveType] (
     [AppliesToExpatriate] BIT,
     [OrganizationUnitId] UNIQUEIDENTIFIER,
     [CountCalendarDays] BIT NOT NULL CONSTRAINT [LeaveType_CountCalendarDays_df] DEFAULT 0,
+    [BlockIfInsufficientBalance] BIT NOT NULL CONSTRAINT [LeaveType_BlockIfInsufficientBalance_df] DEFAULT 1,
+    [CountWeekendAfterFriday] BIT NOT NULL CONSTRAINT [LeaveType_CountWeekendAfterFriday_df] DEFAULT 1,
+    [AutoAccrual] BIT NOT NULL CONSTRAINT [LeaveType_AutoAccrual_df] DEFAULT 1,
     [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
     [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [LeaveType_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
     [ModifiedBy] UNIQUEIDENTIFIER,
@@ -551,6 +557,7 @@ CREATE TABLE [dbo].[HiringRequest] (
     [Profile] NVARCHAR(max) NOT NULL,
     [PositionId] UNIQUEIDENTIFIER,
     [Status] NVARCHAR(20) NOT NULL CONSTRAINT [HiringRequest_Status_df] DEFAULT 'Draft',
+    [RequestedForEmployeeId] UNIQUEIDENTIFIER,
     [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
     [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [HiringRequest_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
     [ModifiedBy] UNIQUEIDENTIFIER,
@@ -580,6 +587,8 @@ CREATE TABLE [dbo].[JobOffer] (
     [RecruitmentCost] DECIMAL(18,2),
     [InterviewEvaluationTemplateId] UNIQUEIDENTIFIER,
     [PublicToken] NVARCHAR(64) NOT NULL,
+    [TrialPeriodEnabled] BIT NOT NULL CONSTRAINT [JobOffer_TrialPeriodEnabled_df] DEFAULT 0,
+    [TrialPeriodMonths] INT,
     [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
     [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [JobOffer_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
     [ModifiedBy] UNIQUEIDENTIFIER,
@@ -692,13 +701,15 @@ CREATE TABLE [dbo].[InterviewParticipant] (
 CREATE TABLE [dbo].[InterviewEvaluation] (
     [Id] UNIQUEIDENTIFIER NOT NULL,
     [InterviewId] UNIQUEIDENTIFIER NOT NULL,
+    [EvaluatorEmployeeId] UNIQUEIDENTIFIER NOT NULL,
     [Score] DECIMAL(4,2) NOT NULL,
     [Comment] NVARCHAR(max) NOT NULL,
     [InterviewerName] NVARCHAR(150) NOT NULL,
     [TemplateName] NVARCHAR(150),
     [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [InterviewEvaluation_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [ModifiedAt] DATETIME2,
     CONSTRAINT [InterviewEvaluation_pkey] PRIMARY KEY CLUSTERED ([Id]),
-    CONSTRAINT [InterviewEvaluation_InterviewId_key] UNIQUE NONCLUSTERED ([InterviewId])
+    CONSTRAINT [InterviewEvaluation_InterviewId_EvaluatorEmployeeId_key] UNIQUE NONCLUSTERED ([InterviewId],[EvaluatorEmployeeId])
 );
 
 -- CreateTable
@@ -886,6 +897,262 @@ CREATE TABLE [dbo].[ReminderDispatchLog] (
     CONSTRAINT [ReminderDispatchLog_DedupKey_key] UNIQUE NONCLUSTERED ([DedupKey])
 );
 
+-- CreateTable
+CREATE TABLE [dbo].[TrainingProvider] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [Name] NVARCHAR(150) NOT NULL,
+    [ContactName] NVARCHAR(150) NOT NULL,
+    [Email] NVARCHAR(150) NOT NULL,
+    [Phone] NVARCHAR(30) NOT NULL,
+    [Specialties] NVARCHAR(500) NOT NULL CONSTRAINT [TrainingProvider_Specialties_df] DEFAULT '',
+    [LastEvaluationScore] DECIMAL(3,2),
+    [LastEvaluationDate] DATE,
+    [NextEvaluationDueAt] DATE NOT NULL,
+    [Status] NVARCHAR(10) NOT NULL CONSTRAINT [TrainingProvider_Status_df] DEFAULT 'active',
+    [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
+    [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TrainingProvider_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [ModifiedBy] UNIQUEIDENTIFIER,
+    [ModifiedAt] DATETIME2,
+    [IsDeleted] BIT NOT NULL CONSTRAINT [TrainingProvider_IsDeleted_df] DEFAULT 0,
+    [DeletedBy] UNIQUEIDENTIFIER,
+    [DeletedAt] DATETIME2,
+    CONSTRAINT [TrainingProvider_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TrainingCourse] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [ReferenceCode] NVARCHAR(20) NOT NULL,
+    [Title] NVARCHAR(200) NOT NULL,
+    [Category] NVARCHAR(100) NOT NULL,
+    [Description] NVARCHAR(max) NOT NULL,
+    [DurationHours] INT NOT NULL,
+    [MaxParticipants] INT NOT NULL,
+    [ProviderId] UNIQUEIDENTIFIER,
+    [Status] NVARCHAR(20) NOT NULL CONSTRAINT [TrainingCourse_Status_df] DEFAULT 'InPreparation',
+    [BudgetAllocated] DECIMAL(14,2) NOT NULL CONSTRAINT [TrainingCourse_BudgetAllocated_df] DEFAULT 0,
+    [BudgetUsed] DECIMAL(14,2) NOT NULL CONSTRAINT [TrainingCourse_BudgetUsed_df] DEFAULT 0,
+    [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
+    [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TrainingCourse_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [ModifiedBy] UNIQUEIDENTIFIER,
+    [ModifiedAt] DATETIME2,
+    [IsDeleted] BIT NOT NULL CONSTRAINT [TrainingCourse_IsDeleted_df] DEFAULT 0,
+    [DeletedBy] UNIQUEIDENTIFIER,
+    [DeletedAt] DATETIME2,
+    CONSTRAINT [TrainingCourse_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TrainingCourse_ReferenceCode_key] UNIQUE NONCLUSTERED ([ReferenceCode])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TrainingSession] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [ReferenceCode] NVARCHAR(20) NOT NULL,
+    [CourseId] UNIQUEIDENTIFIER NOT NULL,
+    [ScheduledAt] DATETIME2 NOT NULL,
+    [EndAt] DATETIME2 NOT NULL,
+    [Mode] NVARCHAR(20) NOT NULL,
+    [Location] NVARCHAR(200),
+    [MeetingLink] NVARCHAR(500),
+    [TrainerName] NVARCHAR(150) NOT NULL,
+    [Status] NVARCHAR(20) NOT NULL CONSTRAINT [TrainingSession_Status_df] DEFAULT 'Scheduled',
+    [Capacity] INT NOT NULL,
+    [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
+    [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TrainingSession_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [ModifiedBy] UNIQUEIDENTIFIER,
+    [ModifiedAt] DATETIME2,
+    [IsDeleted] BIT NOT NULL CONSTRAINT [TrainingSession_IsDeleted_df] DEFAULT 0,
+    [DeletedBy] UNIQUEIDENTIFIER,
+    [DeletedAt] DATETIME2,
+    CONSTRAINT [TrainingSession_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TrainingSession_ReferenceCode_key] UNIQUE NONCLUSTERED ([ReferenceCode])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TrainingEnrollment] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [SessionId] UNIQUEIDENTIFIER NOT NULL,
+    [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+    [RequestedByEmployeeId] UNIQUEIDENTIFIER NOT NULL,
+    [RequestedAt] DATETIME2 NOT NULL CONSTRAINT [TrainingEnrollment_RequestedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [Status] NVARCHAR(20) NOT NULL CONSTRAINT [TrainingEnrollment_Status_df] DEFAULT 'Requested',
+    [AttendanceSheetSigned] BIT NOT NULL CONSTRAINT [TrainingEnrollment_AttendanceSheetSigned_df] DEFAULT 0,
+    [HotScore] DECIMAL(3,2),
+    [HotComment] NVARCHAR(1000),
+    [HotDate] DATE,
+    [ColdDueAt] DATE,
+    [ColdScore] DECIMAL(3,2),
+    [ColdComment] NVARCHAR(1000),
+    [ColdDate] DATE,
+    [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
+    [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TrainingEnrollment_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [ModifiedBy] UNIQUEIDENTIFIER,
+    [ModifiedAt] DATETIME2,
+    CONSTRAINT [TrainingEnrollment_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TrainingBudgetLine] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [Year] INT NOT NULL,
+    [EntityName] NVARCHAR(150) NOT NULL,
+    [CourseTitle] NVARCHAR(200),
+    [Allocated] DECIMAL(14,2) NOT NULL,
+    [Used] DECIMAL(14,2) NOT NULL CONSTRAINT [TrainingBudgetLine_Used_df] DEFAULT 0,
+    [RequestStatus] NVARCHAR(20) NOT NULL CONSTRAINT [TrainingBudgetLine_RequestStatus_df] DEFAULT 'Pending',
+    [Comment] NVARCHAR(500),
+    [CreatedBy] UNIQUEIDENTIFIER NOT NULL,
+    [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TrainingBudgetLine_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [ModifiedBy] UNIQUEIDENTIFIER,
+    [ModifiedAt] DATETIME2,
+    [IsDeleted] BIT NOT NULL CONSTRAINT [TrainingBudgetLine_IsDeleted_df] DEFAULT 0,
+    [DeletedBy] UNIQUEIDENTIFIER,
+    [DeletedAt] DATETIME2,
+    CONSTRAINT [TrainingBudgetLine_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeSetting] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [Key] NVARCHAR(60) NOT NULL,
+    [Value] DECIMAL(18,4) NOT NULL,
+    [Label] NVARCHAR(150) NOT NULL,
+    CONSTRAINT [TimeSetting_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TimeSetting_Key_key] UNIQUE NONCLUSTERED ([Key])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeAttendanceType] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [Name] NVARCHAR(100) NOT NULL,
+    [Description] NVARCHAR(300),
+    [SageTypeCode] INT,
+    CONSTRAINT [TimeAttendanceType_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TimeAttendanceType_Name_key] UNIQUE NONCLUSTERED ([Name])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeAttendanceCode] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [TypeId] UNIQUEIDENTIFIER NOT NULL,
+    [Code] NVARCHAR(20) NOT NULL,
+    [Description] NVARCHAR(300),
+    CONSTRAINT [TimeAttendanceCode_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TimeAttendanceCode_Code_key] UNIQUE NONCLUSTERED ([Code])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimePermanenceRate] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [DayType] NVARCHAR(20) NOT NULL,
+    [Amount] DECIMAL(18,2) NOT NULL,
+    CONSTRAINT [TimePermanenceRate_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TimePermanenceRate_DayType_key] UNIQUE NONCLUSTERED ([DayType])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeMorphoConfig] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [FolderPath] NVARCHAR(500),
+    [CronSchedule] NVARCHAR(60),
+    [IsScheduleActive] BIT NOT NULL CONSTRAINT [TimeMorphoConfig_IsScheduleActive_df] DEFAULT 0,
+    [ModifiedAt] DATETIME2,
+    CONSTRAINT [TimeMorphoConfig_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeMorphoImport] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [FileName] NVARCHAR(260) NOT NULL,
+    [ImportDate] DATETIME2 NOT NULL CONSTRAINT [TimeMorphoImport_ImportDate_df] DEFAULT CURRENT_TIMESTAMP,
+    [Status] NVARCHAR(20) NOT NULL,
+    [TriggeredBy] NVARCHAR(20) NOT NULL,
+    [TotalRecords] INT NOT NULL CONSTRAINT [TimeMorphoImport_TotalRecords_df] DEFAULT 0,
+    [ProcessedRecords] INT NOT NULL CONSTRAINT [TimeMorphoImport_ProcessedRecords_df] DEFAULT 0,
+    [ErrorCount] INT NOT NULL CONSTRAINT [TimeMorphoImport_ErrorCount_df] DEFAULT 0,
+    [ErrorDetails] NVARCHAR(max),
+    CONSTRAINT [TimeMorphoImport_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeMorphoRecord] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [ImportId] UNIQUEIDENTIFIER NOT NULL,
+    [EmployeeId] UNIQUEIDENTIFIER,
+    [BiometricUuid] NVARCHAR(100) NOT NULL,
+    [EmployeeNumber] NVARCHAR(20) NOT NULL,
+    [FirstName] NVARCHAR(100) NOT NULL,
+    [LastName] NVARCHAR(100) NOT NULL,
+    [Departement] NVARCHAR(150),
+    [Fonction] NVARCHAR(150),
+    [DateJour] DATE NOT NULL,
+    [PremierPointage] DATETIME2 NOT NULL,
+    [DernierPointage] DATETIME2 NOT NULL,
+    CONSTRAINT [TimeMorphoRecord_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeManualEntry] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+    [SubmittedById] UNIQUEIDENTIFIER NOT NULL,
+    [ValidatedById] UNIQUEIDENTIFIER,
+    [Date] DATE NOT NULL,
+    [Hours] DECIMAL(6,2) NOT NULL,
+    [Status] NVARCHAR(20) NOT NULL,
+    [ApprovalPoolId] UNIQUEIDENTIFIER,
+    [CurrentApprovalStep] INT,
+    [EntryType] NVARCHAR(30),
+    [RejectionReason] NVARCHAR(500),
+    [FirstClockIn] DATETIME2,
+    [LastClockOut] DATETIME2,
+    [Comments] NVARCHAR(500),
+    [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TimeManualEntry_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    [ModifiedAt] DATETIME2,
+    CONSTRAINT [TimeManualEntry_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeManualEntryHistory] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [EntryId] UNIQUEIDENTIFIER NOT NULL,
+    [Action] NVARCHAR(20) NOT NULL,
+    [ActorId] UNIQUEIDENTIFIER NOT NULL,
+    [Comment] NVARCHAR(500),
+    [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TimeManualEntryHistory_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT [TimeManualEntryHistory_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeDailyHours] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+    [Date] DATE NOT NULL,
+    [WorkedHours] FLOAT(53) NOT NULL,
+    [RequiredHours] FLOAT(53) NOT NULL,
+    CONSTRAINT [TimeDailyHours_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TimeDailyHours_EmployeeId_Date_key] UNIQUE NONCLUSTERED ([EmployeeId],[Date])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeOvertime] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+    [CodeId] UNIQUEIDENTIFIER NOT NULL,
+    [Date] DATE NOT NULL,
+    [Hours] FLOAT(53) NOT NULL,
+    CONSTRAINT [TimeOvertime_pkey] PRIMARY KEY CLUSTERED ([Id])
+);
+
+-- CreateTable
+CREATE TABLE [dbo].[TimeLegacyIdMap] (
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [SourceTable] NVARCHAR(60) NOT NULL,
+    [LegacyId] INT NOT NULL,
+    [TargetId] UNIQUEIDENTIFIER NOT NULL,
+    CONSTRAINT [TimeLegacyIdMap_pkey] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [TimeLegacyIdMap_SourceTable_LegacyId_key] UNIQUE NONCLUSTERED ([SourceTable],[LegacyId])
+);
+
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [OrganizationUnit_ParentId_idx] ON [dbo].[OrganizationUnit]([ParentId]);
 
@@ -912,9 +1179,6 @@ CREATE NONCLUSTERED INDEX [Employee_EmployeeCategoryId_idx] ON [dbo].[Employee](
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [Employee_DirectValidatorId_idx] ON [dbo].[Employee]([DirectValidatorId]);
-
--- CreateIndex
-CREATE NONCLUSTERED INDEX [Employee_ContractType_TerminationDate_idx] ON [dbo].[Employee]([ContractType], [TerminationDate]);
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [User_EmployeeCategoryId_idx] ON [dbo].[User]([EmployeeCategoryId]);
@@ -954,6 +1218,9 @@ CREATE NONCLUSTERED INDEX [ApprovalDecision_ValidatedByEmployeeId_idx] ON [dbo].
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [ApprovalDecision_Token_idx] ON [dbo].[ApprovalDecision]([Token]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [Calendar_EmployeeId_idx] ON [dbo].[Calendar]([EmployeeId]);
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [Holiday_OrganizationUnitId_idx] ON [dbo].[Holiday]([OrganizationUnitId]);
@@ -1043,6 +1310,9 @@ CREATE NONCLUSTERED INDEX [HiringRequest_CreatedBy_idx] ON [dbo].[HiringRequest]
 CREATE NONCLUSTERED INDEX [HiringRequest_PositionId_idx] ON [dbo].[HiringRequest]([PositionId]);
 
 -- CreateIndex
+CREATE NONCLUSTERED INDEX [HiringRequest_RequestedForEmployeeId_idx] ON [dbo].[HiringRequest]([RequestedForEmployeeId]);
+
+-- CreateIndex
 CREATE NONCLUSTERED INDEX [JobOffer_HiringRequestId_idx] ON [dbo].[JobOffer]([HiringRequestId]);
 
 -- CreateIndex
@@ -1095,6 +1365,9 @@ CREATE NONCLUSTERED INDEX [InterviewParticipant_EmployeeId_idx] ON [dbo].[Interv
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [InterviewParticipant_RsvpToken_idx] ON [dbo].[InterviewParticipant]([RsvpToken]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [InterviewEvaluation_InterviewId_idx] ON [dbo].[InterviewEvaluation]([InterviewId]);
 
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [InterviewCriterionScore_EvaluationId_idx] ON [dbo].[InterviewCriterionScore]([EvaluationId]);
@@ -1162,6 +1435,69 @@ CREATE NONCLUSTERED INDEX [ReminderDispatchLog_RecipientEmployeeId_idx] ON [dbo]
 -- CreateIndex
 CREATE NONCLUSTERED INDEX [ReminderDispatchLog_DueDate_idx] ON [dbo].[ReminderDispatchLog]([DueDate]);
 
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingProvider_Status_idx] ON [dbo].[TrainingProvider]([Status]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingCourse_ProviderId_idx] ON [dbo].[TrainingCourse]([ProviderId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingCourse_Status_idx] ON [dbo].[TrainingCourse]([Status]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingSession_CourseId_idx] ON [dbo].[TrainingSession]([CourseId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingSession_Status_idx] ON [dbo].[TrainingSession]([Status]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingSession_ScheduledAt_idx] ON [dbo].[TrainingSession]([ScheduledAt]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingEnrollment_SessionId_idx] ON [dbo].[TrainingEnrollment]([SessionId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingEnrollment_EmployeeId_idx] ON [dbo].[TrainingEnrollment]([EmployeeId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingEnrollment_Status_idx] ON [dbo].[TrainingEnrollment]([Status]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingBudgetLine_Year_idx] ON [dbo].[TrainingBudgetLine]([Year]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TrainingBudgetLine_RequestStatus_idx] ON [dbo].[TrainingBudgetLine]([RequestStatus]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeAttendanceCode_TypeId_idx] ON [dbo].[TimeAttendanceCode]([TypeId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeMorphoImport_FileName_idx] ON [dbo].[TimeMorphoImport]([FileName]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeMorphoRecord_ImportId_idx] ON [dbo].[TimeMorphoRecord]([ImportId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeMorphoRecord_EmployeeId_DateJour_idx] ON [dbo].[TimeMorphoRecord]([EmployeeId], [DateJour]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeMorphoRecord_EmployeeNumber_DateJour_idx] ON [dbo].[TimeMorphoRecord]([EmployeeNumber], [DateJour]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeManualEntry_EmployeeId_Date_idx] ON [dbo].[TimeManualEntry]([EmployeeId], [Date]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeManualEntry_Status_idx] ON [dbo].[TimeManualEntry]([Status]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeManualEntryHistory_EntryId_idx] ON [dbo].[TimeManualEntryHistory]([EntryId]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeOvertime_EmployeeId_Date_idx] ON [dbo].[TimeOvertime]([EmployeeId], [Date]);
+
+-- CreateIndex
+CREATE NONCLUSTERED INDEX [TimeOvertime_CodeId_idx] ON [dbo].[TimeOvertime]([CodeId]);
+
 -- AddForeignKey
 ALTER TABLE [dbo].[OrganizationUnit] ADD CONSTRAINT [OrganizationUnit_ParentId_fkey] FOREIGN KEY ([ParentId]) REFERENCES [dbo].[OrganizationUnit]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
@@ -1199,10 +1535,10 @@ ALTER TABLE [dbo].[Position] ADD CONSTRAINT [Position_ModifiedBy_fkey] FOREIGN K
 ALTER TABLE [dbo].[Employee] ADD CONSTRAINT [Employee_PositionId_fkey] FOREIGN KEY ([PositionId]) REFERENCES [dbo].[Position]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE [dbo].[Employee] ADD CONSTRAINT [Employee_OrganizationUnitId_fkey] FOREIGN KEY ([OrganizationUnitId]) REFERENCES [dbo].[OrganizationUnit]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE [dbo].[Employee] ADD CONSTRAINT [Employee_DirectValidatorId_fkey] FOREIGN KEY ([DirectValidatorId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
-ALTER TABLE [dbo].[Employee] ADD CONSTRAINT [Employee_DirectValidatorId_fkey] FOREIGN KEY ([DirectValidatorId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+ALTER TABLE [dbo].[Employee] ADD CONSTRAINT [Employee_OrganizationUnitId_fkey] FOREIGN KEY ([OrganizationUnitId]) REFERENCES [dbo].[OrganizationUnit]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE [dbo].[Employee] ADD CONSTRAINT [Employee_UserId_fkey] FOREIGN KEY ([UserId]) REFERENCES [dbo].[User]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -1275,6 +1611,9 @@ ALTER TABLE [dbo].[CompanySettings] ADD CONSTRAINT [CompanySettings_ModifiedBy_f
 
 -- AddForeignKey
 ALTER TABLE [dbo].[Calendar] ADD CONSTRAINT [Calendar_EmployeeCategoryId_fkey] FOREIGN KEY ([EmployeeCategoryId]) REFERENCES [dbo].[EmployeeCategory]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[Calendar] ADD CONSTRAINT [Calendar_EmployeeId_fkey] FOREIGN KEY ([EmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE [dbo].[Calendar] ADD CONSTRAINT [Calendar_CreatedBy_fkey] FOREIGN KEY ([CreatedBy]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -1445,6 +1784,9 @@ ALTER TABLE [dbo].[HiringRequest] ADD CONSTRAINT [HiringRequest_CreatedBy_fkey] 
 ALTER TABLE [dbo].[HiringRequest] ADD CONSTRAINT [HiringRequest_ModifiedBy_fkey] FOREIGN KEY ([ModifiedBy]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
+ALTER TABLE [dbo].[HiringRequest] ADD CONSTRAINT [HiringRequest_RequestedForEmployeeId_fkey] FOREIGN KEY ([RequestedForEmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
 ALTER TABLE [dbo].[HiringRequest] ADD CONSTRAINT [HiringRequest_PositionId_fkey] FOREIGN KEY ([PositionId]) REFERENCES [dbo].[Position]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
@@ -1500,6 +1842,9 @@ ALTER TABLE [dbo].[InterviewParticipant] ADD CONSTRAINT [InterviewParticipant_Em
 
 -- AddForeignKey
 ALTER TABLE [dbo].[InterviewEvaluation] ADD CONSTRAINT [InterviewEvaluation_InterviewId_fkey] FOREIGN KEY ([InterviewId]) REFERENCES [dbo].[Interview]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[InterviewEvaluation] ADD CONSTRAINT [InterviewEvaluation_EvaluatorEmployeeId_fkey] FOREIGN KEY ([EvaluatorEmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- AddForeignKey
 ALTER TABLE [dbo].[InterviewCriterionScore] ADD CONSTRAINT [InterviewCriterionScore_EvaluationId_fkey] FOREIGN KEY ([EvaluationId]) REFERENCES [dbo].[InterviewEvaluation]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
@@ -1566,6 +1911,51 @@ ALTER TABLE [dbo].[JobOfferDistribution] ADD CONSTRAINT [JobOfferDistribution_Cr
 
 -- AddForeignKey
 ALTER TABLE [dbo].[JobOfferDistribution] ADD CONSTRAINT [JobOfferDistribution_ModifiedBy_fkey] FOREIGN KEY ([ModifiedBy]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TrainingCourse] ADD CONSTRAINT [TrainingCourse_ProviderId_fkey] FOREIGN KEY ([ProviderId]) REFERENCES [dbo].[TrainingProvider]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TrainingSession] ADD CONSTRAINT [TrainingSession_CourseId_fkey] FOREIGN KEY ([CourseId]) REFERENCES [dbo].[TrainingCourse]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TrainingEnrollment] ADD CONSTRAINT [TrainingEnrollment_SessionId_fkey] FOREIGN KEY ([SessionId]) REFERENCES [dbo].[TrainingSession]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TrainingEnrollment] ADD CONSTRAINT [TrainingEnrollment_EmployeeId_fkey] FOREIGN KEY ([EmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TrainingEnrollment] ADD CONSTRAINT [TrainingEnrollment_RequestedByEmployeeId_fkey] FOREIGN KEY ([RequestedByEmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeAttendanceCode] ADD CONSTRAINT [TimeAttendanceCode_TypeId_fkey] FOREIGN KEY ([TypeId]) REFERENCES [dbo].[TimeAttendanceType]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeMorphoRecord] ADD CONSTRAINT [TimeMorphoRecord_ImportId_fkey] FOREIGN KEY ([ImportId]) REFERENCES [dbo].[TimeMorphoImport]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeMorphoRecord] ADD CONSTRAINT [TimeMorphoRecord_EmployeeId_fkey] FOREIGN KEY ([EmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeManualEntry] ADD CONSTRAINT [TimeManualEntry_EmployeeId_fkey] FOREIGN KEY ([EmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeManualEntry] ADD CONSTRAINT [TimeManualEntry_SubmittedById_fkey] FOREIGN KEY ([SubmittedById]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeManualEntry] ADD CONSTRAINT [TimeManualEntry_ValidatedById_fkey] FOREIGN KEY ([ValidatedById]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeManualEntryHistory] ADD CONSTRAINT [TimeManualEntryHistory_EntryId_fkey] FOREIGN KEY ([EntryId]) REFERENCES [dbo].[TimeManualEntry]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeDailyHours] ADD CONSTRAINT [TimeDailyHours_EmployeeId_fkey] FOREIGN KEY ([EmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeOvertime] ADD CONSTRAINT [TimeOvertime_EmployeeId_fkey] FOREIGN KEY ([EmployeeId]) REFERENCES [dbo].[Employee]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
+
+-- AddForeignKey
+ALTER TABLE [dbo].[TimeOvertime] ADD CONSTRAINT [TimeOvertime_CodeId_fkey] FOREIGN KEY ([CodeId]) REFERENCES [dbo].[TimeAttendanceCode]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;
 
 -- ── Correctif : index unique FILTRE sur Employee.UserId ────────────────
 -- La contrainte generee ci-dessus n'autoriserait qu'UNE SEULE ligne NULL

@@ -25,6 +25,9 @@ import {
   EXPENSE_TYPE_AUTRE,
   PERMISSIONS,
   ROOT_ORGANIZATION_UNIT,
+  TIME_ATTENDANCE_TYPES,
+  TIME_PERMANENCE_RATES,
+  TIME_SETTINGS,
 } from './seed-data';
 
 // Hash bcrypt (cout 10) de ADMIN_PASSWORD. Pour le mot de passe par defaut, le
@@ -211,8 +214,37 @@ w(
 );
 w();
 
-// ── 9. Reactivation des FK ───────────────────────────────────────────────
-w('-- ── 9. Reactivation des contraintes ───────────────────────────────────');
+// ── 9. Module Temps de travail : donnees de reference ────────────────────
+// Meme contenu que seedTimeReference() de seed.ts. Inoffensif si le module est
+// coupe pour ce client (tables inutilisees).
+w('-- ── 9. Temps de travail : codes de paie, reglages, tarifs ──────────────');
+w('-- Types et codes de paie (Sage), parametres du calcul des heures, tarifs de');
+w('-- permanence. Valeurs d\'usine, modifiables ensuite depuis les reglages.');
+for (const t of TIME_ATTENDANCE_TYPES) {
+  const v = `@timeType_${t.Name.replace(/[^A-Za-z0-9]/g, '_')}`;
+  w(`DECLARE ${v} UNIQUEIDENTIFIER = NEWID();`);
+  w('INSERT INTO [dbo].[TimeAttendanceType] ([Id], [Name], [Description], [SageTypeCode])');
+  w(`VALUES (${v}, ${q(t.Name)}, ${t.Description ? q(t.Description) : 'NULL'}, ${t.SageTypeCode});`);
+  w('INSERT INTO [dbo].[TimeAttendanceCode] ([Id], [TypeId], [Code]) VALUES');
+  t.Codes.forEach((code, i) => {
+    const end = i === t.Codes.length - 1 ? ';' : ',';
+    w(`    (NEWID(), ${v}, ${q(code)})${end}`);
+  });
+}
+w('INSERT INTO [dbo].[TimeSetting] ([Id], [Key], [Value], [Label]) VALUES');
+TIME_SETTINGS.forEach((s, i) => {
+  const end = i === TIME_SETTINGS.length - 1 ? ';' : ',';
+  w(`    (NEWID(), ${q(s.Key)}, ${s.Value}, ${q(s.Label)})${end}`);
+});
+w('INSERT INTO [dbo].[TimePermanenceRate] ([Id], [DayType], [Amount]) VALUES');
+TIME_PERMANENCE_RATES.forEach((r, i) => {
+  const end = i === TIME_PERMANENCE_RATES.length - 1 ? ';' : ',';
+  w(`    (NEWID(), ${q(r.DayType)}, ${r.Amount})${end}`);
+});
+w();
+
+// ── 10. Reactivation des FK ──────────────────────────────────────────────
+w('-- ── 10. Reactivation des contraintes ──────────────────────────────────');
 w('-- WITH CHECK : SQL Server revalide les lignes inserees ci-dessus. Si l\'une');
 w('-- d\'elles violait la contrainte, ces instructions echouent et toute la');
 w('-- transaction est annulee — c\'est notre filet de securite.');
@@ -254,3 +286,8 @@ console.log(
     `${categoryPermissionCount} associations categorie/permission,`,
 );
 console.log('  1 entite racine, 1 compte admin, 1 type de frais systeme.');
+console.log(
+  `  Temps de travail : ${TIME_ATTENDANCE_TYPES.length} types de paie, ` +
+    `${TIME_ATTENDANCE_TYPES.reduce((n, t) => n + t.Codes.length, 0)} codes, ` +
+    `${TIME_SETTINGS.length} reglages, ${TIME_PERMANENCE_RATES.length} tarifs de permanence.`,
+);
