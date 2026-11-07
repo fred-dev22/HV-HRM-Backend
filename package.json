@@ -14,7 +14,7 @@
     "client:new": "node scripts/new-client.mjs",
     "client:check": "node scripts/check-instance.mjs",
     "delivery:check": "node scripts/check-delivery.mjs",
-    "build:iis": "prisma generate && ncc build src/main.ts -o dist/standalone -t && xcopy prisma dist\\standalone\\prisma /E /I /Y",
+    "build:iis": "prisma generate && ncc build src/main.ts -o dist/standalone -t && xcopy prisma dist\\standalone\\prisma /E /I /Y && xcopy brand dist\\standalone\\brand /E /I /Y",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",

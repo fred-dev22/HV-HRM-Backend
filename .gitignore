@@ -71,6 +71,5 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 deploy/*/.env.generated
 deploy/*/ADMIN-CREDENTIALS.txt
 
-# Identite du client sur CETTE instance (client.json + logo) : copie locale produite par
-# `npm run client:hv`, jamais dans le produit generique. Une branche client peut la versionner.
-/brand/
+# Identite du client sur CETTE instance (client.json + logo) : produite par `npm run client:grt`.
+# Branche client (qa-grt) : le dossier brand/ est VERSIONNE, pour que le devops n'ait rien a faire.

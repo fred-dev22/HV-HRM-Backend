@@ -107,6 +107,10 @@ git checkout qa
 git checkout -b grt
 ```
 
+Sur une branche client, le dossier `brand/` (profil appliqué par `npm run client:<client>`)
+est **versionné** et `build:iis` le copie dans `dist/standalone/brand/` : le devops reçoit
+la marque et les modules dans le bundle, sans rien à faire. Sur `qa`, `brand/` reste ignoré.
+
 Tout ce qui lui est propre vit ensuite sur cette branche : ses scripts SQL de mise à
 jour, la capture `prisma/deployed/grt.prisma`, ses ajustements. Les évolutions
 générales se font sur `qa` puis se fusionnent dans les branches clients.
