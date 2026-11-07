@@ -80,9 +80,10 @@ describe('CalendarService.importSchedule', () => {
     expect(prisma.calendarWorkDay.createMany.mock.calls[0]![0].data).toHaveLength(7);
   });
 
-  it('refuse le global sans calendrier par defaut et une cible manquante', async () => {
-    const { service } = build();
-    await expect(service.importSchedule({ Scope: 'global', ...change }, 'a')).rejects.toBeInstanceOf(BadRequestException);
+  it('cree le calendrier global comme defaut sur une base neuve, et refuse une cible manquante', async () => {
+    const { service, created } = build();
+    await service.importSchedule({ Scope: 'global', ...change }, 'a');
+    expect((created.mock.calls[0]![0].data as unknown as { IsDefault: boolean }).IsDefault).toBe(true);
     await expect(service.importSchedule({ Scope: 'employee', ...change }, 'a')).rejects.toBeInstanceOf(BadRequestException);
   });
 
