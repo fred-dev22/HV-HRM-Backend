@@ -33,6 +33,7 @@ import { RecruitmentModule } from './modules/recruitment/recruitment.module';
 import { TrainingModule } from './modules/training/training.module';
 import { RemindersModule } from './modules/reminders/reminders.module';
 import { TimeModule } from './modules/time/time.module';
+import { PlanningModule } from './modules/planning/planning.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { RateLimitModule } from './common/rate-limit/rate-limit.module';
 import { AppConfigModule } from './modules/app-config/app-config.module';
@@ -72,6 +73,7 @@ import { ModuleGuard } from './common/modules/module.guard';
     TrainingModule,
     RemindersModule,
     TimeModule,
+    PlanningModule,
     DashboardModule,
     AppConfigModule,
   ],
