@@ -16,6 +16,7 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { formatDateFr, periodSuffixFr } from '../mail/email-templates';
 import { generateApprovalToken } from '../../common/approval-token';
 import { isEligible } from '../../common/utils/eligibility.util';
+import { leaveSlotRange, leaveSlotsOverlap } from './leave-slots';
 import { ListQuery, pageWindow } from '../../common/utils/list-query.util';
 import { nextReferenceCode, retryOnReferenceCodeConflict } from '../../common/utils/reference-code.util';
 import { CreateLeaveRequestDto } from './dto/create-leave-request.dto';
@@ -512,14 +513,20 @@ export class LeaveRequestService {
   // errorMessage personnalise le message selon le sujet controle (beneficiaire
   // vs interimaire, voir appels dans submit()) — la requete/logique reste
   // identique dans les deux cas, seul le libelle change.
+  //
+  // Le controle se fait a la demi-journee (retour client : un conge qui finit
+  // vendredi matin et une recuperation vendredi apres-midi ne se chevauchent
+  // pas) : les dates ne servent qu'a pre-filtrer, la decision se prend sur les
+  // creneaux matin / apres-midi, voir leave-slots.ts.
   private async assertNoOverlap(
     employeeId: string,
     startDate: Date,
     endDate: Date,
     excludeId?: string,
     errorMessage?: (referenceCode: string) => string,
+    periods?: { startPeriod?: string | null; endPeriod?: string | null },
   ) {
-    const overlapping = await this.prisma.leaveRequest.findFirst({
+    const candidates = await this.prisma.leaveRequest.findMany({
       where: {
         EmployeeId: employeeId,
         Status: { in: OVERLAPPING_STATUSES },
@@ -528,7 +535,18 @@ export class LeaveRequestService {
         EndDate: { gte: startDate },
         IsDeleted: false,
       },
+      select: {
+        ReferenceCode: true,
+        StartDate: true,
+        StartPeriod: true,
+        EndDate: true,
+        EndPeriod: true,
+      },
     });
+    const mine = leaveSlotRange(startDate, periods?.startPeriod, endDate, periods?.endPeriod);
+    const overlapping = candidates.find((c) =>
+      leaveSlotsOverlap(mine, leaveSlotRange(c.StartDate, c.StartPeriod, c.EndDate, c.EndPeriod)),
+    );
     if (overlapping) {
       throw new BadRequestException(
         errorMessage
@@ -1208,11 +1226,14 @@ export class LeaveRequestService {
     // LeaveType.BlockIfInsufficientBalance (ex. un type medical).
     await this.assertBalanceSufficient(existing, leaveType);
 
+    const periods = { startPeriod: existing.StartPeriod, endPeriod: existing.EndPeriod };
     await this.assertNoOverlap(
       existing.EmployeeId,
       existing.StartDate,
       existing.EndDate,
       existing.Id,
+      undefined,
+      periods,
     );
 
     // L'interimaire designe doit etre lui-meme disponible sur la periode —
@@ -1225,6 +1246,7 @@ export class LeaveRequestService {
         undefined,
         (code) =>
           `L'intérimaire désigné est lui-même absent sur cette période (${code}) : choisissez quelqu'un d'autre ou ajustez les dates`,
+        periods,
       );
     }
 
