@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { NotificationService } from './notification.service';
+import { isOnApprovedLeave } from '../../common/utils/approver-resolution.util';
 import { MailService } from '../mail/mail.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { AttachmentService, type EmailAttachment } from '../attachment/attachment.service';
@@ -190,13 +191,18 @@ export class WorkflowNotifierService {
     to: string,
     title: string,
     message: string,
-    token: string,
+    token: string | null,
   ) {
     const { attachments, note } = await this.justificatifsForEmail(ctx);
+    // Sans jeton (interimaire en co-validation) : pas de boutons de validation par
+    // email, le jeton est lie au validateur principal et attribuerait la decision
+    // au titulaire. L'interimaire valide depuis l'application.
     const html = (extraNote: string[]) =>
       renderEmailHtml({
         accent: 'primary', chipLabel: 'À valider', headerLabel: KIND_HEADER_LABEL[ctx.kind], title, bodyLines: [message, ...note, ...extraNote], details: ctx.details,
-        actionButtons: this.approvalActionButtons(token),
+        ...(token
+          ? { actionButtons: this.approvalActionButtons(token) }
+          : { ctaLabel: 'Voir la demande', ctaHref: `${frontendOrigin()}${hrefToValidate(ctx)}` }),
       });
     const sent = await this.mail.send({ to, subject: title, html: html([]), attachments });
     // Graph peut refuser un message trop lourd avec ses pieces jointes : mieux
@@ -218,7 +224,9 @@ export class WorkflowNotifierService {
   // demande l'attend (bug remonte en revue du 08/08). `token` vient de la
   // ApprovalDecision fraichement creee, il alimente le lien de validation
   // par email.
-  async notifySubmitted(ctx: WorkflowContext, approverId: string, token: string) {
+  // coApproverIds : interimaires en co-validation (mode "en meme temps"), qui
+  // recoivent la meme demande (in-app + email sans boutons de validation).
+  async notifySubmitted(ctx: WorkflowContext, approverId: string, token: string, coApproverIds: string[] = []) {
     this.broadcastChanged(ctx.kind);
     const [beneficiary, approver] = await Promise.all([
       this.resolvePerson(ctx.beneficiaryId),
@@ -230,7 +238,19 @@ export class WorkflowNotifierService {
       this.notifyPeople([approver], { type: ctx.kind, title, message, href: hrefToValidate(ctx) }),
       this.sendValidationEmail(ctx, approver.email, title, message, token),
       this.notifyInterim(ctx, beneficiary.name),
+      this.notifyCoApprovers(ctx, coApproverIds, approverId, title, message),
     ]);
+  }
+
+  // Interimaire du validateur : il VOIT la demande dans son "A valider" tout le
+  // temps, mais n'est prevenu que si le titulaire est en conge approuve (retour
+  // client du 12/11 : ne pas l'agacer). Jamais d'email : notification dans
+  // l'application seulement.
+  private async notifyCoApprovers(ctx: WorkflowContext, coApproverIds: string[], primaryId: string, title: string, message: string) {
+    if (coApproverIds.length === 0) return;
+    if (!(await isOnApprovedLeave(this.prisma, primaryId))) return;
+    const people = await Promise.all(coApproverIds.map((id) => this.resolvePerson(id)));
+    await this.notifyPeople(people, { type: ctx.kind, title, message: `${message} (en tant qu'intérimaire)`, href: hrefToValidate(ctx) });
   }
 
   // Informe l'intérimaire désigné, à la soumission : il n'était jusqu'ici
@@ -258,7 +278,7 @@ export class WorkflowNotifierService {
   // + email, meme raisonnement que notifySubmitted) + le beneficiaire/
   // createur, informes que leur demande avance (in-app uniquement, pas
   // encore une decision finale).
-  async notifyProgressed(ctx: WorkflowContext, nextApproverId: string, token: string) {
+  async notifyProgressed(ctx: WorkflowContext, nextApproverId: string, token: string, coApproverIds: string[] = []) {
     this.broadcastChanged(ctx.kind);
     const [beneficiary, creator, nextApprover] = await Promise.all([
       this.resolvePerson(ctx.beneficiaryId),
@@ -270,6 +290,7 @@ export class WorkflowNotifierService {
     await Promise.all([
       this.notifyPeople([nextApprover], { type: ctx.kind, title, message, href: hrefToValidate(ctx) }),
       this.sendValidationEmail(ctx, nextApprover.email, title, message, token),
+      this.notifyCoApprovers(ctx, coApproverIds, nextApproverId, title, message),
     ]);
     await this.notifyPeople([beneficiary, creator], {
       type: ctx.kind,

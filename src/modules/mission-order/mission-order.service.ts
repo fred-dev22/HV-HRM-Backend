@@ -7,6 +7,11 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../prisma/generated/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  ApproverSpec,
+  canDecide,
+  findApplicableStep as findApplicableApproverStep,
+  resolveApprovers, DECISION_PRIMARY_INCLUDE, markActingAsInterim, withOnBehalfOf } from '../../common/utils/approver-resolution.util';
 import { ApprovalPoolService } from '../approval-pool/approval-pool.service';
 import { WorkflowNotifierService, WorkflowContext } from '../notification/workflow-notifier.service';
 import { formatDateFr } from '../mail/email-templates';
@@ -180,33 +185,11 @@ export class MissionOrderService {
     return missionOrder;
   }
 
-  // Voir LeaveRequestService.resolveActualApprover — meme logique, dupliquee
-  // faute de base commune entre les 3 modules de workflow d'approbation.
-  private async resolveActualApprover(
-    member: { EmployeeId: string; InterimEmployeeId: string | null },
-    at: Date,
-  ): Promise<string> {
-    if (!member.InterimEmployeeId) return member.EmployeeId;
-    const onApprovedLeave = await this.prisma.leaveRequest.findFirst({
-      where: {
-        EmployeeId: member.EmployeeId,
-        Status: 'Approved',
-        StartDate: { lte: at },
-        EndDate: { gte: at },
-        IsDeleted: false,
-      },
-    });
-    return onApprovedLeave ? member.InterimEmployeeId : member.EmployeeId;
-  }
-
-  private async findApplicableStep<
-    T extends { EmployeeId: string; InterimEmployeeId: string | null; StepOrder: number },
-  >(sortedMembers: T[], requesterEmployeeId: string): Promise<{ member: T; approverId: string } | undefined> {
-    for (const member of sortedMembers) {
-      const approverId = await this.resolveActualApprover(member, new Date());
-      if (approverId !== requesterEmployeeId) return { member, approverId };
-    }
-    return undefined;
+  private async findApplicableStep<T extends ApproverSpec & { StepOrder: number }>(
+    sortedMembers: T[],
+    requesterEmployeeId: string,
+  ): Promise<{ member: T; approverId: string; coApproverIds: string[] } | undefined> {
+    return findApplicableApproverStep(sortedMembers, requesterEmployeeId);
   }
 
   // ── Estimation (calculette live du formulaire de creation) ───────────
@@ -450,14 +433,14 @@ export class MissionOrderService {
     const decisions = await this.prisma.approvalDecision.findMany({
       where: { EntityType: 'MissionOrder', EntityId: id },
       orderBy: { StepOrder: 'asc' },
-      include: { validatedByEmployee: { select: { Id: true, FullName: true } } },
+      include: DECISION_PRIMARY_INCLUDE,
     });
     const allowance = await this.computeAllowanceEstimate(
       missionOrder.employee.EmployeeCategoryId,
       missionOrder.MissionCategory,
       Number(missionOrder.DaysCount),
     );
-    return { ...missionOrder, decisions, allowance };
+    return { ...missionOrder, decisions: withOnBehalfOf(decisions), allowance };
   }
 
   // "Mes missions" inclut aussi celles creees pour un autre employe
@@ -547,11 +530,32 @@ export class MissionOrderService {
       const member = await this.prisma.approvalPoolMember.findFirst({
         where: { ApprovalPoolId: mo.ApprovalPoolId as string, StepOrder: mo.CurrentApprovalStep as number },
       });
-      if (member && (await this.resolveActualApprover(member, now)) === employeeId) {
+      if (member && canDecide(resolveApprovers(member), employeeId)) {
         result.push(mo);
       }
     }
-    return this.attachEstimatedTotals(result);
+    return markActingAsInterim(this.prisma, 'MissionOrder', await this.attachEstimatedTotals(result), employeeId);
+  }
+
+  // Ordres de mission deja decides par ce validateur (approuve, refuse, retourne),
+  // meme logique que LeaveRequestService.findValidatedByMe : ils restent dans son
+  // ecran apres sa decision au lieu de disparaitre avec la file d'attente.
+  async findValidatedByMe(employeeId: string) {
+    const decisions = await this.prisma.approvalDecision.findMany({
+      where: { EntityType: 'MissionOrder', ValidatedByEmployeeId: employeeId, Decision: { notIn: ['Pending', 'Cancelled'] } },
+      select: { EntityId: true },
+    });
+    const ids = [...new Set(decisions.map((d) => d.EntityId))];
+    if (ids.length === 0) return [];
+    const missions = await this.prisma.missionOrder.findMany({
+      where: { Id: { in: ids }, IsDeleted: false },
+      include: {
+        employee: { select: { Id: true, FullName: true, EmployeeNumber: true } },
+        createdByEmployee: { select: { Id: true, FullName: true } },
+      },
+      orderBy: { ModifiedAt: 'desc' },
+    });
+    return this.attachEstimatedTotals(missions);
   }
 
   // ── Workflow ─────────────────────────────────────────────────────────
@@ -625,7 +629,7 @@ export class MissionOrderService {
       return updated;
     }
 
-    const { member: firstStep, approverId } = applicable;
+    const { member: firstStep, approverId, coApproverIds } = applicable;
     const token = generateApprovalToken();
     const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.missionOrder.update({
@@ -654,7 +658,7 @@ export class MissionOrderService {
       });
       return updated;
     });
-    await this.notifier.notifySubmitted(this.toContext(existing), approverId, token);
+    await this.notifier.notifySubmitted(this.toContext(existing), approverId, token, coApproverIds);
     await this.cascadeSubmitLinked(existing, requesterEmployeeId);
     return updated;
   }
@@ -678,7 +682,7 @@ export class MissionOrderService {
     const member = await this.prisma.approvalPoolMember.findFirst({
       where: { ApprovalPoolId: missionOrder.ApprovalPoolId, StepOrder: missionOrder.CurrentApprovalStep },
     });
-    if (!member || (await this.resolveActualApprover(member, new Date())) !== approverEmployeeId) {
+    if (!member || !canDecide(resolveApprovers(member), approverEmployeeId)) {
       throw new ForbiddenException("Vous n'êtes pas le validateur actuel de cet ordre de mission");
     }
   }
@@ -721,7 +725,7 @@ export class MissionOrderService {
       });
 
       if (applicable) {
-        const { member: nextStep, approverId } = applicable;
+        const { member: nextStep, approverId, coApproverIds } = applicable;
         const updated = await tx.missionOrder.update({
           where: { Id: id },
           data: { Status: `InApprovalN${nextStep.StepOrder}`, CurrentApprovalStep: nextStep.StepOrder },
@@ -739,15 +743,15 @@ export class MissionOrderService {
             Token: nextToken,
           },
         });
-        return { updated, nextApproverId: approverId as string | null };
+        return { updated, nextApproverId: approverId as string | null, coApproverIds };
       }
 
       const updated = await tx.missionOrder.update({ where: { Id: id }, data: { Status: 'Approved' }, include: MISSION_EMPLOYEE_INCLUDE });
-      return { updated, nextApproverId: null };
+      return { updated, nextApproverId: null, coApproverIds: [] as string[] };
     });
 
     if (result.nextApproverId) {
-      await this.notifier.notifyProgressed(this.toContext(existing), result.nextApproverId, nextToken as string);
+      await this.notifier.notifyProgressed(this.toContext(existing), result.nextApproverId, nextToken as string, result.coApproverIds);
     } else {
       await this.notifier.notifyApproved(this.toContext(existing), { autoApproved: false });
     }

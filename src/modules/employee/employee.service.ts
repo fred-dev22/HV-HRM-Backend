@@ -145,6 +145,9 @@ export class EmployeeService {
     if (dto.DirectValidatorId) {
       await this.assertValidDirectValidator(dto.DirectValidatorId);
     }
+    if (dto.ValidatorInterimId) {
+      await this.assertValidDirectValidator(dto.ValidatorInterimId);
+    }
     const employeeNumber =
       dto.EmployeeNumber?.trim() || (await this.generateEmployeeNumber());
     const employee = await this.prisma.$transaction(async (tx) => {
@@ -507,6 +510,14 @@ export class EmployeeService {
     // retour au pool par entité) ne déclenchent jamais cette vérification.
     if (dto.DirectValidatorId) {
       await this.assertValidDirectValidator(dto.DirectValidatorId);
+    }
+    // Un interimaire de validateur doit pouvoir traiter la file "a valider" comme
+    // un validateur, et ne peut pas etre le validateur lui-meme.
+    if (dto.ValidatorInterimId) {
+      if (dto.ValidatorInterimId === id) {
+        throw new BadRequestException("Un validateur ne peut pas être son propre intérimaire");
+      }
+      await this.assertValidDirectValidator(dto.ValidatorInterimId);
     }
 
     // 'PositionId' in dto distinguishes "field omitted from the PATCH body"

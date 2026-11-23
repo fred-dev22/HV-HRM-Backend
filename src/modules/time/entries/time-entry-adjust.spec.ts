@@ -25,6 +25,7 @@ describe('TimeEntryService.adjust', () => {
     const prisma = {
       timeManualEntry: { findUnique: jest.fn().mockResolvedValue(entryRow), update },
       approvalDecision: { findFirst: jest.fn().mockResolvedValue({ ValidatedByEmployeeId: validatorId }) },
+      employee: { findUnique: jest.fn().mockResolvedValue({ ValidatorInterimId: null }) },
       timeManualEntryHistory: { create: history },
       $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn({ timeManualEntry: { update }, timeManualEntryHistory: { create: history } })),
     };

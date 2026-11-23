@@ -6,6 +6,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  ApproverSpec,
+  canDecide,
+  directValidatorSpec,
+  findApplicableStep as findApplicableApproverStep,
+  resolveApprovers,
+  DECISION_PRIMARY_INCLUDE,
+  markActingAsInterim,
+  withOnBehalfOf,
+} from '../../common/utils/approver-resolution.util';
 import { ApprovalPoolService } from '../approval-pool/approval-pool.service';
 import { LeaveTransactionService } from '../leave-transaction/leave-transaction.service';
 import {
@@ -466,48 +476,18 @@ export class LeaveRequestService {
     return { date: resumeDay, period: 'am' };
   }
 
-  // Determine le validateur reel d'un membre de pool a une date donnee : le
-  // titulaire, sauf s'il a une demande de conge Approuvee couvrant cette
-  // date, auquel cas on route vers son interimaire declare — plus de plage
-  // de dates saisie a la main sur l'interim, l'absence est detectee au
-  // moment ou la demande arrive a ce niveau.
-  private async resolveActualApprover(
-    member: { EmployeeId: string; InterimEmployeeId: string | null },
-    at: Date,
-  ): Promise<string> {
-    if (!member.InterimEmployeeId) return member.EmployeeId;
-    const onApprovedLeave = await this.prisma.leaveRequest.findFirst({
-      where: {
-        EmployeeId: member.EmployeeId,
-        Status: 'Approved',
-        StartDate: { lte: at },
-        EndDate: { gte: at },
-        IsDeleted: false,
-      },
-    });
-    return onApprovedLeave ? member.InterimEmployeeId : member.EmployeeId;
-  }
-
-  // Premier niveau (a partir de la liste triee fournie) dont le validateur
-  // resolu n'est pas le demandeur lui-meme — un validateur ne doit jamais
-  // rester bloque en attente de sa propre validation, que ce soit comme
-  // titulaire ou comme interimaire du moment. undefined si tous les niveaux
-  // restants resolvent au demandeur (approbation automatique complete).
+  // Premier niveau dont le validateur principal n'est pas le demandeur — un
+  // validateur ne doit jamais rester bloque en attente de sa propre validation.
+  // undefined si tous les niveaux restants resolvent au demandeur
+  // (approbation automatique complete). coApproverIds : interimaires recevant
+  // la demande en meme temps que le titulaire.
   private async findApplicableStep<
-    T extends {
-      EmployeeId: string;
-      InterimEmployeeId: string | null;
-      StepOrder: number;
-    },
+    T extends ApproverSpec & { StepOrder: number },
   >(
     sortedMembers: T[],
     requesterEmployeeId: string,
-  ): Promise<{ member: T; approverId: string } | undefined> {
-    for (const member of sortedMembers) {
-      const approverId = await this.resolveActualApprover(member, new Date());
-      if (approverId !== requesterEmployeeId) return { member, approverId };
-    }
-    return undefined;
+  ): Promise<{ member: T; approverId: string; coApproverIds: string[] } | undefined> {
+    return findApplicableApproverStep(sortedMembers, requesterEmployeeId);
   }
 
   // errorMessage personnalise le message selon le sujet controle (beneficiaire
@@ -850,12 +830,10 @@ export class LeaveRequestService {
     const decisions = await this.prisma.approvalDecision.findMany({
       where: { EntityType: 'LeaveRequest', EntityId: id },
       orderBy: { StepOrder: 'asc' },
-      include: {
-        validatedByEmployee: { select: { Id: true, FullName: true } },
-      },
+      include: DECISION_PRIMARY_INCLUDE,
     });
     const withBalance = await this.attachBalanceFlag(leaveRequest);
-    return { ...withBalance, decisions };
+    return { ...withBalance, decisions: withOnBehalfOf(decisions) };
   }
 
   // "Mes demandes" inclut aussi les demandes que j'ai creees pour un autre
@@ -1116,7 +1094,8 @@ export class LeaveRequestService {
     for (const lr of inApproval) {
       if (!lr.ApprovalPoolId) {
         // Validateur direct (pas de pool) : le validateur courant est celui
-        // de l'ApprovalDecision Pending de cette etape, pas d'interim en v1.
+        // de l'ApprovalDecision Pending de cette etape, ou son interimaire
+        // (porte par sa fiche, voir directValidatorSpec).
         const decision = await this.prisma.approvalDecision.findFirst({
           where: {
             EntityType: 'LeaveRequest',
@@ -1125,7 +1104,13 @@ export class LeaveRequestService {
             Decision: 'Pending',
           },
         });
-        if (decision?.DirectValidatorEmployeeId === employeeId) {
+        if (
+          decision?.DirectValidatorEmployeeId &&
+          canDecide(
+            resolveApprovers(await directValidatorSpec(this.prisma, decision.DirectValidatorEmployeeId)),
+            employeeId,
+          )
+        ) {
           result.push(lr);
         }
         continue;
@@ -1136,14 +1121,11 @@ export class LeaveRequestService {
           StepOrder: lr.CurrentApprovalStep as number,
         },
       });
-      if (
-        member &&
-        (await this.resolveActualApprover(member, now)) === employeeId
-      ) {
+      if (member && canDecide(resolveApprovers(member), employeeId)) {
         result.push(lr);
       }
     }
-    return this.attachBalanceFlags(result);
+    return markActingAsInterim(this.prisma, 'LeaveRequest', await this.attachBalanceFlags(result), employeeId);
   }
 
   // Demandes deja decidees par ce validateur (approuve/refuse/retourne), peu
@@ -1360,6 +1342,10 @@ export class LeaveRequestService {
     }
 
     const token = generateApprovalToken();
+    // Interimaire du validateur direct : il recoit la demande en meme temps que lui.
+    const resolved = resolveApprovers(await directValidatorSpec(this.prisma, directValidatorId));
+    const approverId = resolved.primary !== leaveRequest.EmployeeId ? resolved.primary : directValidatorId;
+    const coApproverIds = resolved.all.filter((id) => id !== approverId && id !== leaveRequest.EmployeeId);
     const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.leaveRequest.update({
         where: { Id: leaveRequest.Id },
@@ -1378,7 +1364,7 @@ export class LeaveRequestService {
           EntityType: 'LeaveRequest',
           EntityId: leaveRequest.Id,
           DirectValidatorEmployeeId: directValidatorId,
-          ValidatedByEmployeeId: directValidatorId,
+          ValidatedByEmployeeId: approverId,
           StepOrder: 1,
           Decision: 'Pending',
           CreatedBy: requesterEmployeeId,
@@ -1389,8 +1375,9 @@ export class LeaveRequestService {
     });
     await this.notifier.notifySubmitted(
       await this.toContext(leaveRequest),
-      directValidatorId,
+      approverId,
       token,
+      coApproverIds,
     );
     return updated;
   }
@@ -1508,7 +1495,7 @@ export class LeaveRequestService {
       return updated;
     }
 
-    const { member: firstStep, approverId } = applicable;
+    const { member: firstStep, approverId, coApproverIds } = applicable;
     const token = generateApprovalToken();
     const updated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.leaveRequest.update({
@@ -1541,6 +1528,7 @@ export class LeaveRequestService {
       await this.toContext(leaveRequest),
       approverId,
       token,
+      coApproverIds,
     );
     return updated;
   }
@@ -1564,8 +1552,8 @@ export class LeaveRequestService {
       );
     }
     // Validateur direct (pas de pool, ApprovalPoolId null) : le validateur
-    // courant est celui de l'ApprovalDecision Pending de cette etape — pas
-    // d'interim en v1, comparaison directe.
+    // courant est celui de l'ApprovalDecision Pending de cette etape, ou son
+    // interimaire.
     if (!leaveRequest.ApprovalPoolId) {
       const decision = await this.prisma.approvalDecision.findFirst({
         where: {
@@ -1576,8 +1564,11 @@ export class LeaveRequestService {
         },
       });
       if (
-        !decision ||
-        decision.DirectValidatorEmployeeId !== approverEmployeeId
+        !decision?.DirectValidatorEmployeeId ||
+        !canDecide(
+          resolveApprovers(await directValidatorSpec(this.prisma, decision.DirectValidatorEmployeeId)),
+          approverEmployeeId,
+        )
       ) {
         throw new ForbiddenException(
           "Vous n'êtes pas le validateur actuel de cette demande",
@@ -1591,11 +1582,7 @@ export class LeaveRequestService {
         StepOrder: leaveRequest.CurrentApprovalStep,
       },
     });
-    if (
-      !member ||
-      (await this.resolveActualApprover(member, new Date())) !==
-        approverEmployeeId
-    ) {
+    if (!member || !canDecide(resolveApprovers(member), approverEmployeeId)) {
       throw new ForbiddenException(
         "Vous n'êtes pas le validateur actuel de cette demande",
       );
@@ -1665,7 +1652,7 @@ export class LeaveRequestService {
       });
 
       if (applicable) {
-        const { member: nextStep, approverId } = applicable;
+        const { member: nextStep, approverId, coApproverIds } = applicable;
         const updated = await tx.leaveRequest.update({
           where: { Id: id },
           data: {
@@ -1686,7 +1673,7 @@ export class LeaveRequestService {
             Token: nextToken,
           },
         });
-        return { updated, nextApproverId: approverId };
+        return { updated, nextApproverId: approverId, coApproverIds };
       }
 
       const updated = await tx.leaveRequest.update({
@@ -1703,7 +1690,7 @@ export class LeaveRequestService {
         existing.Id,
         tx,
       );
-      return { updated, nextApproverId: null };
+      return { updated, nextApproverId: null, coApproverIds: [] as string[] };
     });
 
     if (result.nextApproverId) {
@@ -1711,6 +1698,7 @@ export class LeaveRequestService {
         await this.toContext(existing),
         result.nextApproverId,
         nextToken as string,
+        result.coApproverIds,
       );
     } else {
       await this.notifier.notifyApproved(await this.toContext(existing), {

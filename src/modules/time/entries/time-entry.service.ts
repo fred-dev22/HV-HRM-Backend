@@ -3,6 +3,13 @@ import { Prisma } from '../../../../prisma/generated/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ApprovalPoolService } from '../../approval-pool/approval-pool.service';
 import { NotificationService } from '../../notification/notification.service';
+import {
+  canDecide,
+  directValidatorSpec,
+  findApplicableStep as findApplicableApproverStep,
+  isOnApprovedLeave,
+  resolveApprovers,
+} from '../../../common/utils/approver-resolution.util';
 import { isEntryWindowOpen } from './entry-window';
 import { AdjustTimeEntryDto, CreateTimeEntryDto, DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
 
@@ -63,25 +70,13 @@ export class TimeEntryService {
 
   // ── Routage ───────────────────────────────────────────────────────────────
 
-  // Meme regle que les conges : un validateur en conge approuve (avec interimaire)
-  // est remplace par son interimaire.
-  private async resolveActualApprover(member: { EmployeeId: string; InterimEmployeeId: string | null }, at: Date) {
-    if (!member.InterimEmployeeId) return member.EmployeeId;
-    const onLeave = await this.prisma.leaveRequest.findFirst({
-      where: { EmployeeId: member.EmployeeId, Status: 'Approved', StartDate: { lte: at }, EndDate: { gte: at }, IsDeleted: false },
-    });
-    return onLeave ? member.InterimEmployeeId : member.EmployeeId;
-  }
-
-  private async findApplicableStep<T extends { EmployeeId: string; InterimEmployeeId: string | null }>(
+  // Meme regle que les conges, les missions et les notes de frais : l'interimaire
+  // du validateur voit la saisie en meme temps que lui, a tout moment.
+  private findApplicableStep<T extends { EmployeeId: string; InterimEmployeeId: string | null; StepOrder: number }>(
     sortedMembers: T[],
     beneficiaryId: string,
-  ): Promise<{ member: T; approverId: string } | undefined> {
-    for (const member of sortedMembers) {
-      const approverId = await this.resolveActualApprover(member, new Date());
-      if (approverId !== beneficiaryId) return { member, approverId };
-    }
-    return undefined;
+  ) {
+    return findApplicableApproverStep(sortedMembers, beneficiaryId);
   }
 
   // Place la saisie dans le circuit : approuvee d'office si personne d'autre que
@@ -94,7 +89,9 @@ export class TimeEntryService {
 
     if (employee.DirectValidatorId) {
       if (employee.DirectValidatorId === employeeId) return this.autoApprove(entryId, null, actorId);
-      return this.openStep(entryId, null, 1, employee.DirectValidatorId, null, actorId);
+      const spec = await directValidatorSpec(this.prisma, employee.DirectValidatorId);
+      const resolved = resolveApprovers(spec);
+      return this.openStep(entryId, null, 1, employee.DirectValidatorId, null, actorId, resolved.all.filter((id) => id !== employee.DirectValidatorId && id !== employeeId));
     }
 
     const pool = await this.approvalPools.findApplicablePool(employee.OrganizationUnitId, ENTITY_TYPE);
@@ -110,7 +107,7 @@ export class TimeEntryService {
     const ownLevel = Math.max(0, ...sorted.filter((m) => m.EmployeeId === employeeId).map((m) => m.StepOrder));
     const applicable = await this.findApplicableStep(sorted.filter((m) => m.StepOrder > ownLevel), employeeId);
     if (!applicable) return this.autoApprove(entryId, pool.Id, actorId);
-    return this.openStep(entryId, pool.Id, applicable.member.StepOrder, applicable.approverId, applicable.member.Id, actorId);
+    return this.openStep(entryId, pool.Id, applicable.member.StepOrder, applicable.approverId, applicable.member.Id, actorId, applicable.coApproverIds);
   }
 
   private async autoApprove(entryId: string, poolId: string | null, actorId: string) {
@@ -134,6 +131,7 @@ export class TimeEntryService {
     approverId: string,
     poolMemberId: string | null,
     actorId: string,
+    coApproverIds: string[] = [],
   ) {
     const updated = await this.prisma.$transaction(async (tx) => {
       const entry = await tx.timeManualEntry.update({
@@ -161,7 +159,20 @@ export class TimeEntryService {
       `${updated.employee.FullName} a saisi ${Number(updated.Hours)} h le ${keyOf(updated.Date)}.`,
       '/hr/time/validation',
     );
+    await this.notifyCoApprovers(
+      coApproverIds,
+      approverId,
+      'Saisie de temps à valider',
+      `${updated.employee.FullName} a saisi ${Number(updated.Hours)} h le ${keyOf(updated.Date)} (en tant qu'intérimaire).`,
+    );
     return updated;
+  }
+
+  // L'interimaire voit la saisie tout le temps, mais n'est prevenu que si le
+  // validateur principal est en conge approuve (retour client du 12/11).
+  private async notifyCoApprovers(coApproverIds: string[], primaryId: string, title: string, message: string) {
+    if (coApproverIds.length === 0 || !(await isOnApprovedLeave(this.prisma, primaryId))) return;
+    for (const id of coApproverIds) await this.notify(id, title, message, '/hr/time/validation');
   }
 
   private async notify(employeeId: string, title: string, message: string, href = '/my-space/time') {
@@ -309,6 +320,23 @@ export class TimeEntryService {
 
   // ── Decision ──────────────────────────────────────────────────────────────
 
+  // Validateur prevu de l'etape ou son interimaire (membre de pool, ou validateur direct).
+  private async canActOn(
+    decision: { ApprovalPoolMemberId: string | null; DirectValidatorEmployeeId: string | null; ValidatedByEmployeeId: string },
+    employeeId: string,
+  ): Promise<boolean> {
+    if (decision.ValidatedByEmployeeId === employeeId) return true;
+    if (decision.ApprovalPoolMemberId) {
+      const member = await this.prisma.approvalPoolMember.findUnique({
+        where: { Id: decision.ApprovalPoolMemberId },
+        select: { EmployeeId: true, InterimEmployeeId: true },
+      });
+      return !!member && canDecide(resolveApprovers(member), employeeId);
+    }
+    const validatorId = decision.DirectValidatorEmployeeId ?? decision.ValidatedByEmployeeId;
+    return canDecide(resolveApprovers(await directValidatorSpec(this.prisma, validatorId)), employeeId);
+  }
+
   private async assertIsCurrentApprover(
     entry: Awaited<ReturnType<TimeEntryService['findRaw']>>,
     approverId: string,
@@ -322,7 +350,7 @@ export class TimeEntryService {
     const decision = await this.prisma.approvalDecision.findFirst({
       where: { EntityType: ENTITY_TYPE, EntityId: entry.Id, StepOrder: entry.CurrentApprovalStep, Decision: 'Pending' },
     });
-    if (!decision || decision.ValidatedByEmployeeId !== approverId) {
+    if (!decision || !(await this.canActOn(decision, approverId))) {
       throw new ForbiddenException("Vous n'êtes pas le validateur actuel de cette saisie");
     }
   }
@@ -365,7 +393,7 @@ export class TimeEntryService {
     });
     if (!pending) throw new BadRequestException('Aucune décision en attente pour cette étape');
 
-    let next: { member: { Id: string; StepOrder: number; EmployeeId: string; InterimEmployeeId: string | null }; approverId: string } | undefined;
+    let next: { member: { Id: string; StepOrder: number; EmployeeId: string; InterimEmployeeId: string | null }; approverId: string; coApproverIds: string[] } | undefined;
     if (existing.ApprovalPoolId) {
       const pool = await this.prisma.approvalPool.findUniqueOrThrow({ where: { Id: existing.ApprovalPoolId }, include: { members: true } });
       const remaining = pool.members.filter((m) => m.StepOrder > (existing.CurrentApprovalStep as number)).sort((a, b) => a.StepOrder - b.StepOrder);
@@ -401,6 +429,7 @@ export class TimeEntryService {
 
     if (next) {
       await this.notify(next.approverId, 'Saisie de temps à valider', `${existing.employee.FullName} : saisie du ${keyOf(existing.Date)}.`, '/hr/time/validation');
+      await this.notifyCoApprovers(next.coApproverIds, next.approverId, 'Saisie de temps à valider', `${existing.employee.FullName} : saisie du ${keyOf(existing.Date)} (en tant qu'intérimaire).`);
     } else {
       await this.notify(existing.EmployeeId, 'Saisie de temps approuvée', `Votre saisie du ${keyOf(existing.Date)} est approuvée.`);
     }
@@ -472,7 +501,15 @@ export class TimeEntryService {
   async findPendingForMe(approverId: string, permissions: Set<string>, q: QueryTimeEntriesDto) {
     if (permissions.has('TEMPS_ACCES')) return this.page(this.buildWhere({ ...q, Status: 'Pending' }), q);
     const decisions = await this.prisma.approvalDecision.findMany({
-      where: { EntityType: ENTITY_TYPE, Decision: 'Pending', ValidatedByEmployeeId: approverId },
+      where: {
+        EntityType: ENTITY_TYPE,
+        Decision: 'Pending',
+        OR: [
+          { ValidatedByEmployeeId: approverId },
+          { approvalPoolMember: { InterimEmployeeId: approverId } },
+          { directValidatorEmployee: { ValidatorInterimId: approverId } },
+        ],
+      },
       select: { EntityId: true },
     });
     return this.page(this.buildWhere({ ...q, Status: 'Pending' }, { Id: { in: decisions.map((d) => d.EntityId) } }), q);

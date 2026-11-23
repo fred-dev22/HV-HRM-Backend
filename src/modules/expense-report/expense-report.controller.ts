@@ -42,6 +42,12 @@ export class ExpenseReportController {
     return this.service.findPendingForMe(employeeId);
   }
 
+  @Get('validated-by-me')
+  @RequirePermission('FRAIS_VALIDER')
+  findValidatedByMe(@CurrentUser('employeeId') employeeId: string) {
+    return this.service.findValidatedByMe(employeeId);
+  }
+
   @Get()
   @RequirePermission('FRAIS_VOIR_TOUT')
   findAll() {
