@@ -24,9 +24,7 @@ Sur la base vide, dans cet ordre (chaque script est transactionnel) :
 
 1. `v1.0.0/01-schema.sql`
 2. `v1.0.0/02-seed.sql`
-3. `v1.0.0/03-messagerie.sql` (table de configuration des emails)
-4. `v1.0.0/04-regime-conge.sql` (regime de conge annuel : calendaire ou ouvrables, par employe)
-5. `v1.0.0/05-interim-validateurs.sql` (interimaire du validateur direct)
+3. `v1.0.0/03-migration.sql` (script unique : messagerie, regime de conge annuel, interimaire du validateur direct ; rejouable sans effet)
 
 Le compte administrateur est cree avec le mot de passe de `ADMIN-CREDENTIALS.txt`, a changer obligatoirement a la premiere connexion.
 
