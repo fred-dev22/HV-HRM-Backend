@@ -84,6 +84,14 @@ export class MailSettingsService implements OnApplicationBootstrap {
     };
   }
 
+  // Supprime toute la configuration enregistree (identifiants et secrets compris) : plus aucun
+  // email ne part tant qu'une nouvelle configuration n'est pas saisie, et la bande d'alerte reapparait.
+  async reset() {
+    await this.prisma.mailSettings.deleteMany();
+    this.cache = null;
+    return this.getAdminView();
+  }
+
   async save(dto: SaveMailSettingsDto, modifiedBy: string) {
     const existing = await this.prisma.mailSettings.findFirst();
     const data = this.buildData(dto, existing);

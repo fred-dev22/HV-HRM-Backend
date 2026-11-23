@@ -8,6 +8,7 @@ function build(row: any = null) {
   const store = { row };
   const prisma = {
     mailSettings: {
+      deleteMany: jest.fn(async () => { store.row = null; return { count: 1 }; }),
       findFirst: jest.fn(async () => store.row),
       create: jest.fn(async ({ data }: any) => (store.row = { Id: 'm1', SmtpSecure: false, ...data })),
       update: jest.fn(async ({ data }: any) => (store.row = { ...store.row, ...data })),
@@ -200,5 +201,32 @@ describe('MailSettingsService : identifiants chiffres et masques', () => {
     expect(store.row.SmtpUserEnc).toBeNull();
     expect(store.row.SmtpPasswordEnc).toBeNull();
     expect(await service.isConfigured()).toBe(true);
+  });
+});
+
+describe('MailSettingsService : reinitialisation', () => {
+  beforeEach(() => {
+    process.env.JWT_SECRET = 'secret-de-test';
+  });
+
+  it('supprime la configuration : plus configure, plus aucun identifiant conserve', async () => {
+    const { service, store } = build();
+    await service.save({ provider: 'Graph', sender: 'a@b.mg', graphTenantId: 'tenant-aaaa-1111', graphClientId: 'client-bbbb-2222', graphClientSecret: 'secret-1' }, 'e');
+    expect(await service.isConfigured()).toBe(true);
+
+    const view = await service.reset();
+    expect(store.row).toBeNull();
+    expect(view.configured).toBe(false);
+    expect(view.graph).toMatchObject({ hasTenantId: false, hasClientId: false, hasSecret: false });
+    expect(await service.isConfigured()).toBe(false);
+  });
+
+  it("apres reinitialisation, l'envoi d'emails est refuse avec un message clair", async () => {
+    const { service } = build();
+    await service.save({ provider: 'Smtp', sender: 'rh@c.mg', smtpHost: 'h', smtpPort: 25, smtpAuth: false }, 'e');
+    await service.reset();
+    const r = await new MailService(service).sendDetailed({ to: 'x@y.mg', subject: 's', html: '<p/>' });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/pas configuré/);
   });
 });
