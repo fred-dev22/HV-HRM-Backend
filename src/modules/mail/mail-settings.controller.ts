@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Put, UseGuards } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SystemAdminGuard, isSystemAdminUser } from '../../common/guards/system-admin.guard';
@@ -41,6 +41,12 @@ export class MailSettingsController {
   @UseGuards(SystemAdminGuard)
   save(@Body() dto: SaveMailSettingsDto, @CurrentUser('employeeId') employeeId: string) {
     return this.settings.save(dto, employeeId);
+  }
+
+  @Delete()
+  @UseGuards(SystemAdminGuard)
+  reset() {
+    return this.settings.reset();
   }
 
   // Envoie un vrai email avec la configuration en vigueur : c'est le seul moyen
