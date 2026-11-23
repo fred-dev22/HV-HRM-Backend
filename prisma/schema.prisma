@@ -609,12 +609,6 @@ model ApprovalDecision {
 // CONFIGURATION & CALENDRIER
 // =========================================================================
 
-/// Parametres globaux de l'entreprise. Table singleton : une seule ligne,
-/// jamais inseree une deuxieme fois.
-model CompanySettings {
-  Id                        String    @id @default(uuid()) @db.UniqueIdentifier
-  CompanyName               String    @db.NVarChar(150)
-  Currency                  String    @db.NVarChar(3)
 /// Configuration d'envoi des emails (singleton). Le client choisit UN mode :
 /// Microsoft Graph (tenant / client / secret) ou SMTP (son nom de domaine).
 /// Tous les identifiants (tenant, client, secret, compte SMTP, mot de passe) sont
@@ -642,6 +636,12 @@ model MailSettings {
   ModifiedAt DateTime? @db.DateTime2
 }
 
+/// Parametres globaux de l'entreprise. Table singleton : une seule ligne,
+/// jamais inseree une deuxieme fois.
+model CompanySettings {
+  Id                        String    @id @default(uuid()) @db.UniqueIdentifier
+  CompanyName               String    @db.NVarChar(150)
+  Currency                  String    @db.NVarChar(3)
   Timezone                  String    @db.NVarChar(50)
   // DayCountingRule: WorkingDays | CalendarDays
   DayCountingRule           String    @db.NVarChar(20)
