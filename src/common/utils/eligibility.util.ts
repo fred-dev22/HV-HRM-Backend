@@ -9,12 +9,15 @@ export interface EligibilityRule {
   AppliesToGender: string | null;
   AppliesToExpatriate: boolean | null;
   OrganizationUnitId: string | null;
+  // Regime de conge annuel (GRT) : Calendar | Working | null (= tous).
+  AppliesToLeaveRegime?: string | null;
 }
 
 export interface EligibilityEmployee {
   Gender: string;
   IsExpatriate: boolean;
   OrganizationUnitId: string;
+  LeaveRegime?: string | null;
 }
 
 export function isEligible(
@@ -32,6 +35,10 @@ export function isEligible(
     rule.OrganizationUnitId &&
     rule.OrganizationUnitId !== employee.OrganizationUnitId
   )
+    return false;
+  // Un type reserve a un regime ne concerne que les employes de ce regime ; un
+  // employe sans regime renseigne n'y est pas eligible.
+  if (rule.AppliesToLeaveRegime && rule.AppliesToLeaveRegime !== employee.LeaveRegime)
     return false;
   return true;
 }

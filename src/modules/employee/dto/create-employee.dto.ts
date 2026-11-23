@@ -97,6 +97,12 @@ export class CreateEmployeeDto {
   @IsBoolean()
   IsExpatriate?: boolean;
 
+  // Regime de conge annuel (GRT) : Calendar (jours calendaires) | Working (jours
+  // ouvrables). Voir Employee.LeaveRegime (schema.prisma).
+  @IsOptional()
+  @IsIn(['Calendar', 'Working'], { message: 'Le régime de congé doit être Calendar ou Working' })
+  LeaveRegime?: string | null;
+
   // Validateur direct (retour client, 08/09) — voir Employee.DirectValidatorId
   // (schema.prisma). Absent/null = pool par entite (comportement par defaut).
   @IsOptional()

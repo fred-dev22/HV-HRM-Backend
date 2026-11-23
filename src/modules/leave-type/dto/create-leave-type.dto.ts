@@ -87,6 +87,12 @@ export class CreateLeaveTypeDto {
   @IsBoolean()
   AppliesToExpatriate?: boolean;
 
+  // Regime de conge annuel (GRT) : ne concerne que les employes de ce regime.
+  // Absent / null = tous. Voir Employee.LeaveRegime.
+  @IsOptional()
+  @IsIn(['Calendar', 'Working'], { message: 'Le régime doit être Calendar ou Working' })
+  AppliesToLeaveRegime?: string | null;
+
   @IsOptional()
   @IsUUID()
   OrganizationUnitId?: string;

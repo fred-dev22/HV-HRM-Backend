@@ -332,6 +332,9 @@ export class EmployeeService {
         // l'ajout du week-end au decompte de conges pour un beneficiaire
         // "local" — voir utils/calendar.ts et computeWorkingDays.
         IsExpatriate: true,
+        // Regime de conge annuel (GRT) : necessaire au filtrage (cote frontend)
+        // des types de conge reserves a un regime — voir AbsenceCreate.vue.
+        LeaveRegime: true,
         // Necessaire au filtrage (cote frontend) des types de conge/jours
         // feries restreints par genre — voir eligibility.util.ts et
         // AbsenceCreate.vue. Pas une donnee sensible au meme titre que date
@@ -518,7 +521,7 @@ export class EmployeeService {
     const positionChanged =
       positionFieldSent && newPositionId !== oldPositionId;
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (positionChanged && newPositionId) {
         await this.assertPositionHasCapacity(tx, newPositionId);
       }
@@ -540,6 +543,15 @@ export class EmployeeService {
         },
       });
     });
+    // Changement de regime de conge annuel : l'employe devient eligible a l'autre
+    // type, qu'on lui credite pour la periode en cours (la generation est
+    // idempotente : aucun double credit). Ne bloque pas la modification.
+    if ('LeaveRegime' in dto && (dto.LeaveRegime ?? null) !== (existing.LeaveRegime ?? null)) {
+      await this.leaveTransactionService.generateAccruals(modifiedBy, { employeeId: id }).catch((err) => {
+        this.logger.warn(`Crédit des congés après changement de régime échoué pour l'employé ${id} : ${err.message}`);
+      });
+    }
+    return updated;
   }
 
   // Aligne le compte de connexion (User.Email, aussi l'identifiant de

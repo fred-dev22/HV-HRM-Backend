@@ -25,6 +25,7 @@ Sur la base vide, dans cet ordre (chaque script est transactionnel) :
 1. `v1.0.0/01-schema.sql`
 2. `v1.0.0/02-seed.sql`
 3. `v1.0.0/03-messagerie.sql` (table de configuration des emails)
+4. `v1.0.0/04-regime-conge.sql` (regime de conge annuel : calendaire ou ouvrables, par employe)
 
 Le compte administrateur est cree avec le mot de passe de `ADMIN-CREDENTIALS.txt`, a changer obligatoirement a la premiere connexion.
 
@@ -53,7 +54,8 @@ Le script affiche la marque et les modules lus sur l'instance, puis controle que
 1. Ouvrir <adresse publique de l'application> : le nom, le logo et la couleur sont ceux de Congélo.
 2. Se connecter avec le compte administrateur et changer le mot de passe.
 3. Ouvrir l'engrenage de la barre noire > Messagerie : choisir Microsoft Graph ou SMTP, enregistrer, puis envoyer un email de test (tant que ce n'est pas fait, aucun email ne part et une bande d'alerte s'affiche).
-4. Creer un employe avec un compte : l'email d'accueil doit arriver, au nom de Congélo.
+4. Regime de conge annuel (calendaire 32 j / ouvrables 26 j) : creer deux types de conge annuel, chacun avec le critere « Regime de congé annuel » (Calendaire uniquement / Ouvrables uniquement), puis renseigner le regime de chaque employe (fiche employe ou colonne « Régime de congé annuel » de l'import). Chaque employe recoit et voit alors le type de son regime.
+5. Creer un employe avec un compte : l'email d'accueil doit arriver, au nom de Congélo.
 
 ## 6. Activer ou couper un module plus tard
 

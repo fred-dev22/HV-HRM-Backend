@@ -37,7 +37,7 @@ export class LeaveTransactionService {
     const [employee, balances, leaveTypes] = await Promise.all([
       this.prisma.employee.findUniqueOrThrow({
         where: { Id: employeeId },
-        select: { Gender: true, IsExpatriate: true, OrganizationUnitId: true },
+        select: { Gender: true, IsExpatriate: true, OrganizationUnitId: true, LeaveRegime: true },
       }),
       this.prisma.employeeLeaveBalance.findMany({
         where: { EmployeeId: employeeId },
@@ -80,6 +80,7 @@ export class LeaveTransactionService {
           Gender: true,
           IsExpatriate: true,
           OrganizationUnitId: true,
+          LeaveRegime: true,
           organizationUnit: { select: { Name: true } },
         },
       }),
@@ -142,6 +143,7 @@ export class LeaveTransactionService {
           Gender: true,
           IsExpatriate: true,
           OrganizationUnitId: true,
+          LeaveRegime: true,
           organizationUnit: { select: { Name: true } },
         },
       }),
@@ -373,6 +375,7 @@ export class LeaveTransactionService {
           Gender: true,
           IsExpatriate: true,
           OrganizationUnitId: true,
+          LeaveRegime: true,
         },
       }),
       this.prisma.leaveType.findMany({

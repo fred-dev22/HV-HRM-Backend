@@ -206,6 +206,10 @@ model Employee {
   // "expatrie" (voir leave-request.service.ts computeWorkingDays). false par
   // defaut = regime local, le plus repandu chez HV.
   IsExpatriate      Boolean @default(false)
+  // Regime de conge annuel (demande GRT) : Calendar = decompte en jours calendaires,
+  // Working = jours ouvrables. Null = non renseigne. Sert a cibler un type de conge
+  // (LeaveType.AppliesToLeaveRegime) : chaque employe recoit et voit le type de son regime.
+  LeaveRegime       String? @db.NVarChar(10)
   // Compte d'amorçage cree par le seed (ex : "Admin HV"), pas un vrai
   // membre du personnel — ne doit jamais apparaitre comme option dans un
   // selecteur (beneficiaire, interimaire, validateur, responsable...), voir
@@ -789,6 +793,8 @@ model LeaveType {
   // pour la logique de filtrage partagee entre les deux.
   AppliesToGender     String?  @db.NVarChar(5)
   AppliesToExpatriate Boolean?
+  // Calendar | Working | null (= tous). Voir Employee.LeaveRegime.
+  AppliesToLeaveRegime String? @db.NVarChar(10)
   OrganizationUnitId  String?  @db.UniqueIdentifier
 
   // Decompte calendaire (retour client, 08/09) : false (par defaut) = jours
