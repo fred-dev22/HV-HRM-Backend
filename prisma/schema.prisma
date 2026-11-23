@@ -615,6 +615,33 @@ model CompanySettings {
   Id                        String    @id @default(uuid()) @db.UniqueIdentifier
   CompanyName               String    @db.NVarChar(150)
   Currency                  String    @db.NVarChar(3)
+/// Configuration d'envoi des emails (singleton). Le client choisit UN mode :
+/// Microsoft Graph (tenant / client / secret) ou SMTP (son nom de domaine).
+/// Tous les identifiants (tenant, client, secret, compte SMTP, mot de passe) sont
+/// stockes chiffres (AES-256-GCM) et jamais renvoyes en clair au frontend.
+/// Seuls l'expediteur, le serveur, le port et le mode TLS sont en clair.
+model MailSettings {
+  Id       String @id @default(uuid()) @db.UniqueIdentifier
+  // Graph | Smtp
+  Provider String @db.NVarChar(10)
+  // Adresse expeditrice (boite Graph ou "From" SMTP)
+  Sender   String @db.NVarChar(200)
+
+  GraphTenantIdEnc     String? @db.NVarChar(1000)
+  GraphClientIdEnc     String? @db.NVarChar(1000)
+  GraphClientSecretEnc String? @db.NVarChar(1000)
+
+  SmtpHost        String? @db.NVarChar(200)
+  SmtpPort        Int?
+  // true = TLS direct (port 465), false = STARTTLS / sans TLS (587, 25)
+  SmtpSecure      Boolean @default(false)
+  SmtpUserEnc     String? @db.NVarChar(1000)
+  SmtpPasswordEnc String? @db.NVarChar(1000)
+
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+}
+
   Timezone                  String    @db.NVarChar(50)
   // DayCountingRule: WorkingDays | CalendarDays
   DayCountingRule           String    @db.NVarChar(20)
