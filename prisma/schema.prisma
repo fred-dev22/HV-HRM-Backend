@@ -225,6 +225,9 @@ model Employee {
   // peut etre son propre validateur direct (rare, ex: aucun niveau
   // au-dessus) : traite comme auto-approbation, meme regle que pour le pool.
   DirectValidatorId String? @db.UniqueIdentifier
+  // Interimaire de cet employe quand il valide comme validateur direct : il voit les
+  // demandes en meme temps que lui, a tout moment. Appartient au validateur.
+  ValidatorInterimId String? @db.UniqueIdentifier
 
   // Module Temps de travail : un cadre est exclu du calcul des heures
   // supplementaires (reprise de la regle isBe du systeme Pointage). BiometricUuid
@@ -245,6 +248,8 @@ model Employee {
   position           Position?         @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   directValidator    Employee?         @relation("EmployeeDirectValidator", fields: [DirectValidatorId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   directValidatorFor Employee[]        @relation("EmployeeDirectValidator")
+  validatorInterim   Employee?         @relation("EmployeeValidatorInterim", fields: [ValidatorInterimId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
+  validatorInterimFor Employee[]       @relation("EmployeeValidatorInterim")
   organizationUnit   OrganizationUnit  @relation("EmployeeOrganizationUnit", fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   user               User?             @relation(fields: [UserId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   employeeCategory   EmployeeCategory? @relation(fields: [EmployeeCategoryId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
@@ -383,6 +388,7 @@ model Employee {
   @@index([OrganizationUnitId])
   @@index([EmployeeCategoryId])
   @@index([DirectValidatorId])
+  @@index([ValidatorInterimId])
 }
 
 /// Compte utilisateur donnant acces a la plateforme AfrikEdge / Productive

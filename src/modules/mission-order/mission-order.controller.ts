@@ -56,6 +56,12 @@ export class MissionOrderController {
     return this.service.findPendingForMe(employeeId);
   }
 
+  @Get('validated-by-me')
+  @RequirePermission('MISSION_VALIDER')
+  findValidatedByMe(@CurrentUser('employeeId') employeeId: string) {
+    return this.service.findValidatedByMe(employeeId);
+  }
+
   @Get()
   @RequirePermission('MISSION_VOIR_TOUT')
   findAll() {

@@ -108,4 +108,10 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsUUID()
   DirectValidatorId?: string;
+
+  // Interimaire de cet employe quand il valide comme validateur direct : il recoit
+  // les demandes en meme temps que lui — voir Employee.ValidatorInterimId (schema.prisma).
+  @IsOptional()
+  @IsUUID()
+  ValidatorInterimId?: string | null;
 }
