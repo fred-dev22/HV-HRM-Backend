@@ -16,7 +16,7 @@ Fichier genere par `scripts/new-client.mjs` le 2026-11-07. Version livree : 1.0.
 1. Une base SQL Server **vide**, et un login SQL `db_owner` sur cette base.
 2. Node.js 20 ou plus sur le serveur, et un mode d'hebergement (IIS + iisnode, ou service Windows derriere un reverse proxy).
 3. Une adresse publique avec certificat HTTPS, qui sert le frontend et transmet `/api` au backend.
-4. Pour les emails : une application Microsoft Entra (Azure AD) avec la permission `Mail.Send` et une boite d'envoi. Pour les pieces jointes : `Sites.ReadWrite.All` et un site SharePoint (facultatif).
+4. Pour les emails : une boite d'envoi Microsoft 365 (application Microsoft Entra avec la permission `Mail.Send`) OU un serveur SMTP du nom de domaine du client. Ils se saisissent dans l'application (engrenage de la barre noire > Messagerie), pas dans le `.env`. Pour les pieces jointes : `Sites.ReadWrite.All` et un site SharePoint (facultatif).
 
 ## 2. Base de donnees
 
@@ -24,6 +24,7 @@ Sur la base vide, dans cet ordre (chaque script est transactionnel) :
 
 1. `v1.0.0/01-schema.sql`
 2. `v1.0.0/02-seed.sql`
+3. `v1.0.0/03-messagerie.sql` (table de configuration des emails)
 
 Le compte administrateur est cree avec le mot de passe de `ADMIN-CREDENTIALS.txt`, a changer obligatoirement a la premiere connexion.
 
@@ -32,7 +33,7 @@ Le compte administrateur est cree avec le mot de passe de `ADMIN-CREDENTIALS.txt
 1. Sur un poste de build Windows (une seule fois, le meme paquet sert tous les clients) : `npm run build:iis` produit `dist/standalone/`.
 2. Copier `dist/standalone/` sur le serveur.
 3. Copier `deploy/grt/.env.generated` sur le serveur sous le nom `.env`, dans le repertoire de travail du processus, et le dossier `deploy/grt/brand/` (client.json + logo) a cote.
-4. Renseigner dans `.env` : `DATABASE_URL`, les blocs `GRAPH_MAIL_*` et, si utilise, `GRAPH_SHAREPOINT_*`.
+4. Renseigner dans `.env` : `DATABASE_URL` et, si utilise, les variables `GRAPH_SHAREPOINT_*`. L'envoi des emails ne se configure PAS ici (voir la section 5).
 5. Demarrer le backend (apres la base de donnees).
 
 ## 4. Frontend
@@ -51,7 +52,8 @@ Le script affiche la marque et les modules lus sur l'instance, puis controle que
 
 1. Ouvrir <adresse publique de l'application> : le nom, le logo et la couleur sont ceux de Congélo.
 2. Se connecter avec le compte administrateur et changer le mot de passe.
-3. Creer un employe avec un compte : l'email d'accueil doit arriver, au nom de Congélo.
+3. Ouvrir l'engrenage de la barre noire > Messagerie : choisir Microsoft Graph ou SMTP, enregistrer, puis envoyer un email de test (tant que ce n'est pas fait, aucun email ne part et une bande d'alerte s'affiche).
+4. Creer un employe avec un compte : l'email d'accueil doit arriver, au nom de Congélo.
 
 ## 6. Activer ou couper un module plus tard
 
