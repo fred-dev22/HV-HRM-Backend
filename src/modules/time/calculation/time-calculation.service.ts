@@ -499,6 +499,8 @@ export class TimeCalculationService {
       where: {
         Date: { gte: toDate(from), lte: toDate(to) },
         ...(employeeIds ? { EmployeeId: { in: employeeIds } } : {}),
+        // Les cadres n'apparaissent jamais dans la paie, meme si des lignes ont ete calculees avant qu'ils soient marques cadres.
+        employee: { IsCadre: false },
       },
       include: { employee: { select: { FullName: true, EmployeeNumber: true } }, code: { include: { type: true } } },
       orderBy: [{ Date: 'asc' }],
@@ -527,7 +529,7 @@ export class TimeCalculationService {
   async sageRows(from: string, to: string) {
     assertRange(from, to);
     const rows = await this.prisma.timeOvertime.findMany({
-      where: { Date: { gte: toDate(from), lte: toDate(to) } },
+      where: { Date: { gte: toDate(from), lte: toDate(to) }, employee: { IsCadre: false } },
       include: { employee: { select: { EmployeeNumber: true } }, code: { include: { type: true } } },
     });
     const lines: SageSourceLine[] = rows.map((r) => ({

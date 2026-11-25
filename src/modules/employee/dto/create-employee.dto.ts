@@ -97,6 +97,12 @@ export class CreateEmployeeDto {
   @IsBoolean()
   IsExpatriate?: boolean;
 
+  // Cadre : exclu du calcul des heures supplementaires et de l'export paie
+  // (module Temps). Voir Employee.IsCadre (schema.prisma).
+  @IsOptional()
+  @IsBoolean()
+  IsCadre?: boolean;
+
   // Regime de conge annuel (GRT) : Calendar (jours calendaires) | Working (jours
   // ouvrables). Voir Employee.LeaveRegime (schema.prisma).
   @IsOptional()
