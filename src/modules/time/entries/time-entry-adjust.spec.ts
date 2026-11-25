@@ -30,7 +30,7 @@ describe('TimeEntryService.adjust', () => {
       $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn({ timeManualEntry: { update }, timeManualEntryHistory: { create: history } })),
     };
     const notifications = { create: jest.fn() };
-    const service = new TimeEntryService(prisma as never, {} as never, notifications as never);
+    const service = new TimeEntryService(prisma as never, {} as never, notifications as never, {} as never);
     return { service, history, update, notifications };
   }
 

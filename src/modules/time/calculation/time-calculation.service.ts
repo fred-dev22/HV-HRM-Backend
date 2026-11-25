@@ -188,6 +188,14 @@ export class TimeCalculationService {
     return set;
   }
 
+  // Jours feries de la periode, employe par employe (utilise par la saisie en lot).
+  async holidayKeysByEmployee(employeeIds: string[], from: string, to: string): Promise<Map<string, Set<string>>> {
+    const employees = await this.loadEmployees(employeeIds);
+    const rows = await this.loadHolidayRows(from, to);
+    const ancestors = await this.loadOrganizationAncestors();
+    return new Map(Array.from(employees.values()).map((e) => [e.id, this.holidaysFor(e, rows, ancestors)]));
+  }
+
   // Heures prevues par jour de semaine (0 = dimanche) pour un employe, d'apres
   // son calendrier (employe > categorie > global). null = pas de calendrier.
   private async scheduleOf(

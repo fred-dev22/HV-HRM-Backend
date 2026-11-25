@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '../../../../prisma/generated/client';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { ApprovalPoolService } from '../../approval-pool/approval-pool.service';
@@ -11,7 +11,16 @@ import {
   resolveApprovers,
 } from '../../../common/utils/approver-resolution.util';
 import { isEntryWindowOpen } from './entry-window';
-import { AdjustTimeEntryDto, CreateTimeEntryDto, DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
+import { BATCH_MAX_DAYS, BATCH_MAX_ENTRIES, BATCH_SKIP_LABELS, BatchPlan, datesInRange, declaredKey, planBatch } from './entry-batch';
+import { TimeCalculationService } from '../calculation/time-calculation.service';
+import {
+  AdjustTimeEntryDto,
+  CreateTimeEntryBatchDto,
+  CreateTimeEntryDto,
+  DecideTimeEntryDto,
+  QueryTimeEntriesDto,
+  UpdateTimeEntryDto,
+} from './time-entry.dto';
 
 const ENTITY_TYPE = 'TimeEntry';
 const INCLUDE = {
@@ -44,6 +53,18 @@ export function resolveTimes(dateKey: string, hours: number | undefined, start?:
   };
 }
 
+// Statuts d'une demande de conge acquise (y compris les declarations medicales).
+const TAKEN_LEAVE_STATUSES = ['Approved', 'Registered', 'Done', 'Regularized'];
+const frDate = (key: string) => key.split('-').reverse().join('/');
+
+// Pendant une saisie en lot, les notifications sont regroupees : une seule par
+// destinataire au lieu d'une par journee.
+interface NotificationDigest {
+  toValidate: Map<string, number>;
+  coApprovers: Map<string, { primaryId: string; count: number }>;
+  approved: Map<string, number>;
+}
+
 const fmtHours = (h: number) => `${String(h).replace('.', ',')} h`;
 
 // Texte d'historique d'un ajustement : ancienne et nouvelle duree, plage horaire
@@ -66,6 +87,7 @@ export class TimeEntryService {
     private readonly prisma: PrismaService,
     private readonly approvalPools: ApprovalPoolService,
     private readonly notifications: NotificationService,
+    private readonly calculation: TimeCalculationService,
   ) {}
 
   // ── Routage ───────────────────────────────────────────────────────────────
@@ -81,17 +103,17 @@ export class TimeEntryService {
 
   // Place la saisie dans le circuit : approuvee d'office si personne d'autre que
   // le beneficiaire ne peut la valider, sinon en attente du premier validateur.
-  private async route(entryId: string, employeeId: string, actorId: string) {
+  private async route(entryId: string, employeeId: string, actorId: string, digest?: NotificationDigest) {
     const employee = await this.prisma.employee.findUniqueOrThrow({
       where: { Id: employeeId },
       select: { OrganizationUnitId: true, DirectValidatorId: true },
     });
 
     if (employee.DirectValidatorId) {
-      if (employee.DirectValidatorId === employeeId) return this.autoApprove(entryId, null, actorId);
+      if (employee.DirectValidatorId === employeeId) return this.autoApprove(entryId, null, actorId, digest);
       const spec = await directValidatorSpec(this.prisma, employee.DirectValidatorId);
       const resolved = resolveApprovers(spec);
-      return this.openStep(entryId, null, 1, employee.DirectValidatorId, null, actorId, resolved.all.filter((id) => id !== employee.DirectValidatorId && id !== employeeId));
+      return this.openStep(entryId, null, 1, employee.DirectValidatorId, null, actorId, resolved.all.filter((id) => id !== employee.DirectValidatorId && id !== employeeId), digest);
     }
 
     const pool = await this.approvalPools.findApplicablePool(employee.OrganizationUnitId, ENTITY_TYPE);
@@ -106,11 +128,11 @@ export class TimeEntryService {
     // Le niveau du beneficiaire et ceux en dessous sont acquis.
     const ownLevel = Math.max(0, ...sorted.filter((m) => m.EmployeeId === employeeId).map((m) => m.StepOrder));
     const applicable = await this.findApplicableStep(sorted.filter((m) => m.StepOrder > ownLevel), employeeId);
-    if (!applicable) return this.autoApprove(entryId, pool.Id, actorId);
-    return this.openStep(entryId, pool.Id, applicable.member.StepOrder, applicable.approverId, applicable.member.Id, actorId, applicable.coApproverIds);
+    if (!applicable) return this.autoApprove(entryId, pool.Id, actorId, digest);
+    return this.openStep(entryId, pool.Id, applicable.member.StepOrder, applicable.approverId, applicable.member.Id, actorId, applicable.coApproverIds, digest);
   }
 
-  private async autoApprove(entryId: string, poolId: string | null, actorId: string) {
+  private async autoApprove(entryId: string, poolId: string | null, actorId: string, digest?: NotificationDigest) {
     const updated = await this.prisma.$transaction(async (tx) => {
       const entry = await tx.timeManualEntry.update({
         where: { Id: entryId },
@@ -120,6 +142,10 @@ export class TimeEntryService {
       await tx.timeManualEntryHistory.create({ data: { EntryId: entryId, Action: 'APPROVE', ActorId: actorId, Comment: 'Approbation automatique' } });
       return entry;
     });
+    if (digest) {
+      digest.approved.set(updated.EmployeeId, (digest.approved.get(updated.EmployeeId) ?? 0) + 1);
+      return updated;
+    }
     await this.notify(updated.EmployeeId, 'Saisie de temps approuvée', `Votre saisie du ${keyOf(updated.Date)} est approuvée.`);
     return updated;
   }
@@ -132,6 +158,7 @@ export class TimeEntryService {
     poolMemberId: string | null,
     actorId: string,
     coApproverIds: string[] = [],
+    digest?: NotificationDigest,
   ) {
     const updated = await this.prisma.$transaction(async (tx) => {
       const entry = await tx.timeManualEntry.update({
@@ -153,6 +180,14 @@ export class TimeEntryService {
       });
       return entry;
     });
+    if (digest) {
+      digest.toValidate.set(approverId, (digest.toValidate.get(approverId) ?? 0) + 1);
+      for (const id of coApproverIds) {
+        const current = digest.coApprovers.get(id);
+        digest.coApprovers.set(id, { primaryId: approverId, count: (current?.count ?? 0) + 1 });
+      }
+      return updated;
+    }
     await this.notify(
       approverId,
       'Saisie de temps à valider',
@@ -223,17 +258,28 @@ export class TimeEntryService {
     await this.assertNoDuplicate(employeeId, dto.Date.slice(0, 10), dto.EntryType);
     const times = resolveTimes(dto.Date.slice(0, 10), dto.Hours, dto.StartTime, dto.EndTime);
 
+    return this.createOne(
+      { employeeId, date: dto.Date, times, entryType: dto.EntryType, comments: dto.Comments },
+      actorId,
+    );
+  }
+
+  private async createOne(
+    data: { employeeId: string; date: string; times: ReturnType<typeof resolveTimes>; entryType: string; comments?: string },
+    actorId: string,
+    digest?: NotificationDigest,
+  ) {
     const entry = await this.prisma.$transaction(async (tx) => {
       const created = await tx.timeManualEntry.create({
         data: {
-          EmployeeId: employeeId,
+          EmployeeId: data.employeeId,
           SubmittedById: actorId,
-          Date: toDate(dto.Date),
-          Hours: times.hours,
-          FirstClockIn: times.clockIn,
-          LastClockOut: times.clockOut,
-          EntryType: dto.EntryType,
-          Comments: dto.Comments,
+          Date: toDate(data.date),
+          Hours: data.times.hours,
+          FirstClockIn: data.times.clockIn,
+          LastClockOut: data.times.clockOut,
+          EntryType: data.entryType,
+          Comments: data.comments,
           Status: 'Pending',
         },
       });
@@ -241,12 +287,170 @@ export class TimeEntryService {
       return created;
     });
     try {
-      return await this.route(entry.Id, employeeId, actorId);
+      return await this.route(entry.Id, data.employeeId, actorId, digest);
     } catch (err) {
       // Pas de circuit configure : on n'abandonne pas une saisie orpheline.
       await this.prisma.timeManualEntryHistory.deleteMany({ where: { EntryId: entry.Id } });
       await this.prisma.timeManualEntry.delete({ where: { Id: entry.Id } });
       throw err;
+    }
+  }
+
+  // ── Saisie en lot ─────────────────────────────────────────────────────────
+
+  // Le RH declare le meme element pour plusieurs employes sur une periode. Les
+  // journees impossibles sont ecartees avec leur motif ; chaque journee retenue
+  // devient une saisie normale, qui suit le circuit de validation de l'employe.
+  // Avec DryRun, rien n'est cree.
+  async createBatch(dto: CreateTimeEntryBatchDto, actorId: string) {
+    const from = dto.From.slice(0, 10);
+    const to = dto.To.slice(0, 10);
+    if (to < from) throw new BadRequestException('La date de fin doit être après la date de début');
+    if (datesInRange(from, to).length > BATCH_MAX_DAYS) {
+      throw new BadRequestException(`La période ne peut pas dépasser ${BATCH_MAX_DAYS} jours`);
+    }
+    // Un panier ou une permanence compte pour 1 par jour, sans horaires.
+    const oncePerDay = dto.EntryType === 'panier' || dto.EntryType === 'permanence';
+    const timesOn = (dateKey: string) =>
+      oncePerDay ? resolveTimes(dateKey, 1) : resolveTimes(dateKey, dto.Hours, dto.StartTime, dto.EndTime);
+    timesOn(from); // horaires invalides : refus avant tout traitement
+
+    const ids = [...new Set(dto.EmployeeIds)];
+    const employees = await this.prisma.employee.findMany({
+      where: { Id: { in: ids }, IsDeleted: false, IsSystem: false },
+      select: {
+        Id: true,
+        FullName: true,
+        EmployeeNumber: true,
+        Status: true,
+        HireDate: true,
+        TerminationDate: true,
+        OrganizationUnitId: true,
+        DirectValidatorId: true,
+      },
+      orderBy: { FullName: 'asc' },
+    });
+    if (employees.length !== ids.length) throw new NotFoundException('Un des employés choisis est introuvable');
+
+    const poolByUnit = new Map<string, boolean>();
+    for (const e of employees) {
+      if (e.DirectValidatorId || poolByUnit.has(e.OrganizationUnitId)) continue;
+      const pool = await this.approvalPools.findApplicablePool(e.OrganizationUnitId, ENTITY_TYPE);
+      poolByUnit.set(e.OrganizationUnitId, !!pool && pool.members.length > 0);
+    }
+
+    const [holidays, leaves, declared] = await Promise.all([
+      this.calculation.holidayKeysByEmployee(ids, from, to),
+      this.prisma.leaveRequest.findMany({
+        where: {
+          EmployeeId: { in: ids },
+          Status: { in: TAKEN_LEAVE_STATUSES },
+          IsDeleted: false,
+          StartDate: { lte: toDate(to) },
+          EndDate: { gte: toDate(from) },
+        },
+        select: { EmployeeId: true, StartDate: true, EndDate: true, StartPeriod: true, EndPeriod: true },
+      }),
+      this.prisma.timeManualEntry.findMany({
+        where: {
+          EmployeeId: { in: ids },
+          EntryType: dto.EntryType,
+          Status: { in: ['Pending', 'Approved'] },
+          Date: { gte: toDate(from), lte: toDate(to) },
+        },
+        select: { EmployeeId: true, Date: true },
+      }),
+    ]);
+
+    const plan = planBatch({
+      employees: employees.map((e) => ({
+        id: e.Id,
+        isInactive: e.Status === 'Inactive',
+        hireDate: e.HireDate ? keyOf(e.HireDate) : null,
+        terminationDate: e.TerminationDate ? keyOf(e.TerminationDate) : null,
+        hasRoute: !!e.DirectValidatorId || poolByUnit.get(e.OrganizationUnitId) === true,
+      })),
+      from,
+      to,
+      weekdays: dto.Weekdays,
+      includeHolidays: dto.IncludeHolidays ?? false,
+      holidays,
+      leaves: leaves.map((l) => ({
+        employeeId: l.EmployeeId,
+        start: keyOf(l.StartDate),
+        end: keyOf(l.EndDate),
+        startPeriod: l.StartPeriod,
+        endPeriod: l.EndPeriod,
+      })),
+      declared: new Set(declared.map((d) => declaredKey(d.EmployeeId, keyOf(d.Date)))),
+      today: todayKey(),
+    });
+    if (plan.toCreate.length > BATCH_MAX_ENTRIES) {
+      throw new BadRequestException(
+        `${plan.toCreate.length} saisies demandées : réduisez la période ou le nombre d'employés (${BATCH_MAX_ENTRIES} au maximum)`,
+      );
+    }
+    if (dto.DryRun) return this.batchReport(employees, plan, true, 0, []);
+
+    const digest: NotificationDigest = { toValidate: new Map(), coApprovers: new Map(), approved: new Map() };
+    const failures: { employeeId: string; dateKey: string; message: string }[] = [];
+    let created = 0;
+    for (const item of plan.toCreate) {
+      try {
+        await this.createOne(
+          { employeeId: item.employeeId, date: item.dateKey, times: timesOn(item.dateKey), entryType: dto.EntryType, comments: dto.Comments },
+          actorId,
+          digest,
+        );
+        created++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Saisie en lot : journée ${item.dateKey} non créée pour ${item.employeeId} : ${message}`);
+        failures.push({ ...item, message: err instanceof HttpException ? message : 'Erreur technique' });
+      }
+    }
+    await this.sendDigest(digest, from, to);
+    return this.batchReport(employees, plan, false, created, failures);
+  }
+
+  private batchReport(
+    employees: { Id: string; FullName: string; EmployeeNumber: string }[],
+    plan: BatchPlan,
+    dryRun: boolean,
+    created: number,
+    failures: { employeeId: string; dateKey: string; message: string }[],
+  ) {
+    return {
+      DryRun: dryRun,
+      Planned: plan.toCreate.length,
+      Created: created,
+      Employees: employees.map((e) => {
+        const skipped = new Map<string, string[]>();
+        const add = (reason: string, dateKey: string) => skipped.set(reason, [...(skipped.get(reason) ?? []), dateKey]);
+        for (const s of plan.skipped) if (s.employeeId === e.Id) add(BATCH_SKIP_LABELS[s.reason], s.dateKey);
+        for (const f of failures) if (f.employeeId === e.Id) add(f.message, f.dateKey);
+        const planned = plan.toCreate.filter((c) => c.employeeId === e.Id).length;
+        return {
+          EmployeeId: e.Id,
+          FullName: e.FullName,
+          EmployeeNumber: e.EmployeeNumber,
+          Planned: planned - failures.filter((f) => f.employeeId === e.Id).length,
+          Skipped: Array.from(skipped, ([Reason, Dates]) => ({ Reason, Dates })),
+        };
+      }),
+    };
+  }
+
+  private async sendDigest(digest: NotificationDigest, from: string, to: string) {
+    const period = `saisie en lot du ${frDate(from)} au ${frDate(to)}`;
+    for (const [id, count] of digest.toValidate) {
+      await this.notify(id, 'Saisies de temps à valider', `${count} saisie(s) à valider (${period}).`, '/hr/time/validation');
+    }
+    for (const [id, { primaryId, count }] of digest.coApprovers) {
+      await this.notifyCoApprovers([id], primaryId, 'Saisies de temps à valider', `${count} saisie(s) à valider (${period}, en tant qu'intérimaire).`);
+    }
+    for (const [id, count] of digest.approved) {
+      await this.notify(id, 'Saisies de temps approuvées', `${count} saisie(s) approuvée(s) (${period}).`);
     }
   }
 

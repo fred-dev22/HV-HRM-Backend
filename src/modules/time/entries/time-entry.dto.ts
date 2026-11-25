@@ -1,5 +1,9 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -57,6 +61,62 @@ export class CreateTimeEntryDto {
   @IsString()
   @MaxLength(500)
   Comments?: string;
+}
+
+// Saisie en lot (RH) : le meme element pour plusieurs employes, sur les jours de
+// semaine choisis d'une periode.
+export class CreateTimeEntryBatchDto {
+  @IsArray()
+  @ArrayNotEmpty({ message: 'Choisissez au moins un employé' })
+  @ArrayMaxSize(200, { message: 'Pas plus de 200 employés par saisie en lot' })
+  @IsUUID('all', { each: true })
+  EmployeeIds!: string[];
+
+  @IsDateString()
+  From!: string;
+
+  @IsDateString()
+  To!: string;
+
+  // Jours de semaine retenus : 0 = dimanche ... 6 = samedi.
+  @IsArray()
+  @ArrayNotEmpty({ message: 'Choisissez au moins un jour de la semaine' })
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  Weekdays!: number[];
+
+  @IsOptional()
+  @IsBoolean()
+  IncludeHolidays?: boolean;
+
+  @IsIn(TIME_ENTRY_TYPES)
+  EntryType!: (typeof TIME_ENTRY_TYPES)[number];
+
+  // Ignores pour un panier ou une permanence (1 par jour).
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @Max(24)
+  Hours?: number;
+
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de début au format HH:mm' })
+  StartTime?: string;
+
+  @IsOptional()
+  @Matches(TIME_PATTERN, { message: 'Heure de fin au format HH:mm' })
+  EndTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  Comments?: string;
+
+  // true : controle seulement, rien n'est cree.
+  @IsOptional()
+  @IsBoolean()
+  DryRun?: boolean;
 }
 
 export class UpdateTimeEntryDto {

@@ -4,7 +4,7 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 import { CurrentPermissions } from '../../../common/decorators/current-permissions.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { TimeEntryService } from './time-entry.service';
-import { AdjustTimeEntryDto, CreateTimeEntryDto, DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
+import { AdjustTimeEntryDto, CreateTimeEntryBatchDto, CreateTimeEntryDto,DecideTimeEntryDto, QueryTimeEntriesDto, UpdateTimeEntryDto } from './time-entry.dto';
 
 // @RequirePermission n'accepte qu'un seul code : les routes ouvertes a
 // plusieurs permissions (employe OU validateur OU RH) controlent ici, et le
@@ -22,6 +22,12 @@ export class TimeEntryController {
   create(@Body() dto: CreateTimeEntryDto, @CurrentUser('employeeId') me: string, @CurrentPermissions() permissions: Set<string>) {
     requireAny(permissions, 'TEMPS_SAISIR', 'TEMPS_ACCES');
     return this.service.create(dto, me, permissions);
+  }
+
+  @Post('batch')
+  @RequirePermission('TEMPS_ACCES')
+  createBatch(@Body() dto: CreateTimeEntryBatchDto, @CurrentUser('employeeId') me: string) {
+    return this.service.createBatch(dto, me);
   }
 
   @Get('mine')
