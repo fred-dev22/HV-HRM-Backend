@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { isModuleEnabled } from '../../common/modules/modules.config';
+import { OVERTIME_HOURS_ONLY } from '../time/calculation/pay-codes';
 
 const PENDING_STATUSES = ['Pending', 'InApprovalN1', 'InApprovalN2', 'InApprovalN3', 'InApprovalN4'];
 const APPROVED_LIKE = ['Approved', 'Registered', 'Done', 'Regularized'];
@@ -43,7 +44,10 @@ export class DashboardService {
         where: { Date: { gte: monthStart, lt: nextMonthStart } },
         _sum: { WorkedHours: true, RequiredHours: true },
       }),
-      this.prisma.timeOvertime.aggregate({ where: { Date: { gte: monthStart, lt: nextMonthStart } }, _sum: { Hours: true } }),
+      this.prisma.timeOvertime.aggregate({
+        where: { Date: { gte: monthStart, lt: nextMonthStart }, ...OVERTIME_HOURS_ONLY },
+        _sum: { Hours: true },
+      }),
       this.prisma.timeMorphoImport.findFirst({ orderBy: { ImportDate: 'desc' }, select: { ImportDate: true, Status: true } }),
     ]);
     return {

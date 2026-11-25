@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CalendarService } from '../../calendar/calendar.service';
+import { OVERTIME_HOURS_ONLY, PANIER_CODE, PERMANENCE_CODE } from './pay-codes';
 import {
   DEFAULT_TIME_SETTINGS,
   OvertimeMethod,
@@ -22,8 +23,6 @@ import {
 } from './overtime-engine';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
-const PANIER_CODE = '30900';
-const PERMANENCE_CODE = '2210';
 
 export interface DailyHoursResult {
   calculated: number;
@@ -617,7 +616,7 @@ export class TimeCalculationService {
         select: { EmployeeId: true, Date: true, WorkedHours: true },
       }),
       this.prisma.timeOvertime.findMany({
-        where: { Date: { gte: toDate(from), lte: toDate(to) } },
+        where: { Date: { gte: toDate(from), lte: toDate(to) }, ...OVERTIME_HOURS_ONLY },
         select: { EmployeeId: true, Hours: true },
       }),
     ]);
