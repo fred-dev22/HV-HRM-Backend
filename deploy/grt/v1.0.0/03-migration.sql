@@ -144,3 +144,27 @@ BEGIN CATCH
     THROW;
 END CATCH;
 GO
+
+-- ============================================================================
+-- Temps de travail : calcul des heures supplementaires a la semaine uniquement
+-- (au-dela de 40 h). Le reglage 'overtime_method' passe a 1 (hebdomadaire) ; le
+-- moteur ne lit plus cette valeur, elle est mise a jour pour rester coherente.
+-- Rejouable sans effet. Aucune autre donnee n'est modifiee.
+-- ============================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+BEGIN TRY
+
+BEGIN TRAN;
+
+UPDATE [dbo].[TimeSetting] SET [Value] = 1 WHERE [Key] = N'overtime_method' AND [Value] <> 1;
+
+COMMIT TRAN;
+PRINT N'Script (calcul hebdomadaire uniquement) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO

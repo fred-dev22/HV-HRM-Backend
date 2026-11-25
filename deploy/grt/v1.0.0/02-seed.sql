@@ -307,7 +307,7 @@ INSERT INTO [dbo].[TimeSetting] ([Id], [Key], [Value], [Label]) VALUES
     (NEWID(), N'weekly_hs01_threshold_hours', 8, N'Seuil hebdomadaire HS01/HS02'),
     (NEWID(), N'monthly_ni_cap_hours', 20, N'Plafond mensuel non imposable HS03/HS04'),
     (NEWID(), N'monthly_ni_cap_company_wide', 1, N'Plafond non imposable partagé par toute l''entreprise (1 = oui)'),
-    (NEWID(), N'overtime_method', 0, N'Méthode de calcul des heures supplémentaires'),
+    (NEWID(), N'overtime_method', 1, N'Méthode de calcul des heures supplémentaires'),
     (NEWID(), N'deduct_break', 0, N'Retirer la pause du temps travaillé (1 = oui)'),
     (NEWID(), N'include_non_working_days', 0, N'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)');
 INSERT INTO [dbo].[TimePermanenceRate] ([Id], [DayType], [Amount]) VALUES

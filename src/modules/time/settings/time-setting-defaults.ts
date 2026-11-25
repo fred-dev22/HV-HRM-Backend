@@ -8,8 +8,8 @@ export const TIME_SETTINGS: { Key: string; Value: number; Label: string }[] = [
   { Key: 'monthly_ni_cap_hours', Value: 20, Label: 'Plafond mensuel non imposable HS03/HS04' },
   // 1 = un seul plafond pour toute l'entreprise (comme le systeme Pointage), 0 = un plafond par employe.
   { Key: 'monthly_ni_cap_company_wide', Value: 1, Label: "Plafond non imposable partagé par toute l'entreprise (1 = oui)" },
-  // 0 = journalier (historique), 1 = hebdomadaire (40 h), 2 = les deux, au choix a chaque calcul.
-  { Key: 'overtime_method', Value: 0, Label: 'Méthode de calcul des heures supplémentaires' },
+  // Calcul a la semaine uniquement (au-dela de 40 h). Valeur informative : le moteur ne la lit plus.
+  { Key: 'overtime_method', Value: 1, Label: 'Méthode de calcul des heures supplémentaires' },
   // Corrections par rapport au systeme Pointage, desactivees tant que le client
   // ne les a pas validees (elles changent les heures payees). 1 = active.
   { Key: 'deduct_break', Value: 0, Label: 'Retirer la pause du temps travaillé (1 = oui)' },

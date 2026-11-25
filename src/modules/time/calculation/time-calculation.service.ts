@@ -4,7 +4,6 @@ import { CalendarService } from '../../calendar/calendar.service';
 import {
   DEFAULT_TIME_SETTINGS,
   OvertimeMethod,
-  methodSettingOf,
   PermanenceRates,
   SageSourceLine,
   TimeCalcSettings,
@@ -330,20 +329,15 @@ export class TimeCalculationService {
 
   // ── T5 : heures supplementaires, panier, permanence ───────────────────────
 
-  // Methode retenue : celle du reglage client. Avec "les deux", la methode
-  // demandee est utilisee (journalier par defaut) ; avec une methode fixe, une
-  // demande differente est refusee plutot que d'etre ignoree en silence, car elle
-  // change la paie.
+  // Methode unique : le calcul se fait toujours a la semaine (au-dela de 40 h). Le
+  // reglage 'overtime_method' n'est plus lu, quelle que soit sa valeur en base : le
+  // meme resultat chez tous les clients. Une demande explicite du mode journalier
+  // est refusee plutot qu'ignoree en silence, car elle changerait la paie.
   private async resolveMethod(requested?: OvertimeMethod): Promise<OvertimeMethod> {
-    const row = await this.prisma.timeSetting.findUnique({ where: { Key: 'overtime_method' } });
-    const setting = methodSettingOf(row ? Number(row.Value) : undefined);
-    if (setting === 'both') return requested ?? 'daily';
-    if (requested && requested !== setting) {
-      throw new BadRequestException(
-        `Le calcul est réglé sur la méthode ${setting === 'daily' ? 'journalière' : 'hebdomadaire'} (Configuration > Réglages).`,
-      );
+    if (requested && requested !== 'weekly') {
+      throw new BadRequestException('Le calcul des heures supplémentaires se fait uniquement à la semaine (au-delà de 40 h).');
     }
-    return setting;
+    return 'weekly';
   }
 
   // Etat des calculs d'une periode : T5 part des heures journalieres de T4.
