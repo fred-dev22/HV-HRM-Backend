@@ -11,15 +11,33 @@ import {
   resolveApprovers,
 } from '../../../common/utils/approver-resolution.util';
 import { isEntryWindowOpen } from './entry-window';
-import { BATCH_MAX_DAYS, BATCH_MAX_ENTRIES, BATCH_SKIP_LABELS, BatchPlan, datesInRange, declaredKey, planBatch } from './entry-batch';
+import { BATCH_MAX_DAYS, BATCH_MAX_ENTRIES, BATCH_SKIP_LABELS, BatchPlan, datesInRange, declaredKey, isFullLeaveDay, planBatch } from './entry-batch';
+import {
+  ExistingEntry,
+  LineResult,
+  PlannedLine,
+  Slot,
+  isIncomplete,
+  isOncePerDay,
+  isWorkType,
+  minutesOf,
+  overlaps,
+  planLines,
+  slotLabel,
+} from './entry-lines';
+import { WORK_ENTRY_TYPES } from '../calculation/work-records';
+import { assertWeekOpen, removeControl, validatedWeeks, weekKey } from '../weeks/week-lock';
 import { TimeCalculationService } from '../calculation/time-calculation.service';
 import {
   AdjustTimeEntryDto,
   CreateTimeEntryBatchDto,
   CreateTimeEntryDto,
+  CreateTimeEntryLinesDto,
   DecideTimeEntryDto,
   QueryTimeEntriesDto,
   UpdateTimeEntryDto,
+  TIME_ENTRY_TYPES,
+  TIME_PATTERN,
 } from './time-entry.dto';
 
 const ENTITY_TYPE = 'TimeEntry';
@@ -41,7 +59,15 @@ export function resolveTimes(dateKey: string, hours: number | undefined, start?:
     if (!hours) throw new BadRequestException("Indiquez la durée, ou l'heure de début et l'heure de fin");
     return { hours, clockIn: null as Date | null, clockOut: null as Date | null };
   }
-  if (!start || !end) throw new BadRequestException("Renseignez l'heure de début ET l'heure de fin");
+  if (!start || !end) {
+    // Entree ou sortie seule (oubli de pointage) : enregistree, a completer avant validation.
+    if (hours) throw new BadRequestException("Indiquez soit les horaires, soit la durée");
+    return {
+      hours: 0,
+      clockIn: start ? new Date(`${dateKey}T${start}:00`) : null,
+      clockOut: end ? new Date(`${dateKey}T${end}:00`) : null,
+    };
+  }
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
   const minutes = eh! * 60 + em! - (sh! * 60 + sm!);
@@ -51,6 +77,41 @@ export function resolveTimes(dateKey: string, hours: number | undefined, start?:
     clockIn: new Date(`${dateKey}T${start}:00`),
     clockOut: new Date(`${dateKey}T${end}:00`),
   };
+}
+
+// Periode d'une saisie, pour les controles de chevauchement.
+const slotFrom = (entryType: string, times: ReturnType<typeof resolveTimes>): Slot => ({
+  entryType,
+  start: minutesOf(times.clockIn),
+  end: minutesOf(times.clockOut),
+  hours: times.hours,
+});
+const toSlot = (e: { EntryType: string | null; FirstClockIn: Date | null; LastClockOut: Date | null; Hours: unknown }): Slot => ({
+  entryType: e.EntryType ?? '',
+  start: minutesOf(e.FirstClockIn),
+  end: minutesOf(e.LastClockOut),
+  hours: Number(e.Hours),
+});
+
+// Horaires d'une ligne envoyee : controle ici (et non par le ValidationPipe) pour
+// qu'une ligne fausse n'entraine pas le refus de tout le fichier.
+function lineTimes(
+  dateKey: string,
+  line: { EntryType: string; StartTime?: string; EndTime?: string; Hours?: number },
+): ReturnType<typeof resolveTimes> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || Number.isNaN(toDate(dateKey).getTime()) || keyOf(toDate(dateKey)) !== dateKey) {
+    throw new BadRequestException('Date invalide (AAAA-MM-JJ)');
+  }
+  if (!(TIME_ENTRY_TYPES as readonly string[]).includes(line.EntryType)) throw new BadRequestException('Type de saisie inconnu');
+  // Un panier ou une permanence compte pour 1 par jour, sans horaires.
+  if (isOncePerDay(line.EntryType)) return resolveTimes(dateKey, 1);
+  const start = line.StartTime || undefined;
+  const end = line.EndTime || undefined;
+  for (const time of [start, end]) {
+    if (time && !TIME_PATTERN.test(time)) throw new BadRequestException('Heure au format HH:mm attendue');
+  }
+  if (line.Hours !== undefined && !(line.Hours > 0 && line.Hours <= 24)) throw new BadRequestException('Durée entre 0 et 24 h');
+  return resolveTimes(dateKey, start || end ? undefined : line.Hours, start, end);
 }
 
 // Statuts d'une demande de conge acquise (y compris les declarations medicales).
@@ -133,6 +194,18 @@ export class TimeEntryService {
   }
 
   private async autoApprove(entryId: string, poolId: string | null, actorId: string, digest?: NotificationDigest) {
+    const current = await this.prisma.timeManualEntry.findUnique({
+      where: { Id: entryId },
+      select: { EntryType: true, FirstClockIn: true, LastClockOut: true },
+    });
+    // Incomplete : elle reste en attente, la completer la renvoie dans le circuit.
+    if (current && isIncomplete(current.EntryType ?? '', current.FirstClockIn, current.LastClockOut)) {
+      return this.prisma.timeManualEntry.update({
+        where: { Id: entryId },
+        data: { Status: 'Pending', ApprovalPoolId: poolId, CurrentApprovalStep: null, ModifiedAt: new Date() },
+        include: INCLUDE,
+      });
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
       const entry = await tx.timeManualEntry.update({
         where: { Id: entryId },
@@ -147,6 +220,7 @@ export class TimeEntryService {
       return updated;
     }
     await this.refreshDailyHours([updated.EmployeeId], keyOf(updated.Date), keyOf(updated.Date));
+    await removeControl(this.prisma, updated.EmployeeId, keyOf(updated.Date), actorId, 'Saisie approuvée après le contrôle');
     await this.notify(updated.EmployeeId, 'Saisie de temps approuvée', `Votre saisie du ${keyOf(updated.Date)} est approuvée.`);
     return updated;
   }
@@ -230,6 +304,55 @@ export class TimeEntryService {
     }
   }
 
+  // ── Perimetre ─────────────────────────────────────────────────────────────
+
+  // Employes pour qui la personne peut saisir : null = tout le monde (RH). Un
+  // validateur : son equipe (et lui-meme avec TEMPS_SAISIR).
+  private async scopeOf(actorId: string, permissions: Set<string>): Promise<Set<string> | null> {
+    if (permissions.has('TEMPS_ACCES')) return null;
+    const ids = permissions.has('TEMPS_VALIDER') ? await this.calculation.teamEmployeeIds(actorId) : [];
+    return new Set(permissions.has('TEMPS_SAISIR') ? [...ids, actorId] : ids);
+  }
+
+  // Lecture : ses propres saisies et celles de son equipe.
+  private async readableBase(actorId: string, permissions: Set<string>): Promise<Prisma.TimeManualEntryWhereInput> {
+    if (permissions.has('TEMPS_ACCES')) return {};
+    const team = permissions.has('TEMPS_VALIDER') ? await this.calculation.teamEmployeeIds(actorId) : [];
+    return { EmployeeId: { in: [...team, actorId] } };
+  }
+
+  // Employes proposes dans les fenetres de saisie.
+  async entryEmployees(actorId: string, permissions: Set<string>) {
+    const scope = await this.scopeOf(actorId, permissions);
+    const rows = await this.prisma.employee.findMany({
+      where: { IsDeleted: false, IsSystem: false, Status: { not: 'Inactive' }, ...(scope ? { Id: { in: [...scope] } } : {}) },
+      select: { Id: true, FullName: true, EmployeeNumber: true, organizationUnit: { select: { Name: true } } },
+      orderBy: [{ FullName: 'asc' }, { Id: 'asc' }],
+    });
+    return rows.map((e) => ({ Id: e.Id, FullName: e.FullName, EmployeeNumber: e.EmployeeNumber, EntityName: e.organizationUnit?.Name ?? null }));
+  }
+
+  // Une saisie de travail ne peut pas en chevaucher une autre du meme jour.
+  private async assertNoOverlap(employeeId: string, dateKey: string, slot: Slot, exceptId?: string) {
+    if (!isWorkType(slot.entryType)) return;
+    const others = await this.prisma.timeManualEntry.findMany({
+      where: {
+        EmployeeId: employeeId,
+        Date: toDate(dateKey),
+        EntryType: { in: WORK_ENTRY_TYPES },
+        Status: { in: ['Pending', 'Approved'] },
+        ...(exceptId ? { Id: { not: exceptId } } : {}),
+      },
+      select: { EntryType: true, FirstClockIn: true, LastClockOut: true, Hours: true },
+    });
+    const clash = (others ?? []).map(toSlot).find((o) => overlaps(o, slot));
+    if (clash) {
+      throw new BadRequestException(
+        `Chevauche une saisie existante de ce jour (${slotLabel(clash)}) : modifiez-la ou annulez-la`,
+      );
+    }
+  }
+
   // ── Saisie ────────────────────────────────────────────────────────────────
 
   private assertWindow(dateKey: string, isHr: boolean) {
@@ -259,16 +382,22 @@ export class TimeEntryService {
   }
 
   async create(dto: CreateTimeEntryDto, actorId: string, permissions: Set<string>) {
-    const isHr = permissions.has('TEMPS_ACCES');
     const employeeId = dto.EmployeeId ?? actorId;
-    if (employeeId !== actorId && !isHr) throw new ForbiddenException('Saisie pour un autre employé réservée au RH');
-    if (employeeId === actorId && !isHr && !permissions.has('TEMPS_SAISIR')) throw new ForbiddenException();
+    const scope = await this.scopeOf(actorId, permissions);
+    if (scope && !scope.has(employeeId)) {
+      throw new ForbiddenException(
+        employeeId === actorId ? 'Vous ne pouvez pas saisir vos temps' : 'Saisie pour un autre employé réservée au RH et à son manager',
+      );
+    }
     const target = await this.prisma.employee.findFirst({ where: { Id: employeeId, IsDeleted: false }, select: { Id: true } });
     if (!target) throw new NotFoundException('Employé introuvable');
 
-    this.assertWindow(dto.Date.slice(0, 10), isHr);
+    // Delai du RH pour qui saisit pour un autre (RH ou manager).
+    this.assertWindow(dto.Date.slice(0, 10), permissions.has('TEMPS_ACCES') || employeeId !== actorId);
+    await assertWeekOpen(this.prisma, employeeId, dto.Date.slice(0, 10));
     await this.assertNoDuplicate(employeeId, dto.Date.slice(0, 10), dto.EntryType);
     const times = resolveTimes(dto.Date.slice(0, 10), dto.Hours, dto.StartTime, dto.EndTime);
+    await this.assertNoOverlap(employeeId, dto.Date.slice(0, 10), slotFrom(dto.EntryType, times));
 
     return this.createOne(
       { employeeId, date: dto.Date, times, entryType: dto.EntryType, comments: dto.Comments },
@@ -277,7 +406,7 @@ export class TimeEntryService {
   }
 
   private async createOne(
-    data: { employeeId: string; date: string; times: ReturnType<typeof resolveTimes>; entryType: string; comments?: string },
+    data: { employeeId: string; date: string; times: ReturnType<typeof resolveTimes>; entryType: string; comments?: string; source?: string },
     actorId: string,
     digest?: NotificationDigest,
   ) {
@@ -292,6 +421,7 @@ export class TimeEntryService {
           LastClockOut: data.times.clockOut,
           EntryType: data.entryType,
           Comments: data.comments,
+          Source: data.source ?? 'Manual',
           Status: 'Pending',
         },
       });
@@ -310,11 +440,12 @@ export class TimeEntryService {
 
   // ── Saisie en lot ─────────────────────────────────────────────────────────
 
-  // Le RH declare le meme element pour plusieurs employes sur une periode. Les
-  // journees impossibles sont ecartees avec leur motif ; chaque journee retenue
-  // devient une saisie normale, qui suit le circuit de validation de l'employe.
-  // Avec DryRun, rien n'est cree.
-  async createBatch(dto: CreateTimeEntryBatchDto, actorId: string) {
+  // Le RH (ou un manager pour son equipe) declare le meme element pour plusieurs
+  // employes sur une periode. Les journees impossibles sont ecartees avec leur
+  // motif ; chaque journee retenue devient une saisie normale, qui suit le
+  // circuit de validation de l'employe. Avec DryRun, rien n'est cree et la liste
+  // des journees retenues est renvoyee pour etre ajustee puis envoyee en lignes.
+  async createBatch(dto: CreateTimeEntryBatchDto, actorId: string, permissions: Set<string>) {
     const from = dto.From.slice(0, 10);
     const to = dto.To.slice(0, 10);
     if (to < from) throw new BadRequestException('La date de fin doit être après la date de début');
@@ -328,6 +459,8 @@ export class TimeEntryService {
     timesOn(from); // horaires invalides : refus avant tout traitement
 
     const ids = [...new Set(dto.EmployeeIds)];
+    const scope = await this.scopeOf(actorId, permissions);
+    if (scope && ids.some((id) => !scope.has(id))) throw new ForbiddenException("Un des employés choisis n'est pas dans votre équipe");
     const employees = await this.prisma.employee.findMany({
       where: { Id: { in: ids }, IsDeleted: false, IsSystem: false },
       select: {
@@ -374,7 +507,11 @@ export class TimeEntryService {
       }),
     ]);
 
+    const locked = await validatedWeeks(this.prisma, ids, from, to);
+    const lockedDays = new Set<string>();
+    for (const e of employees) for (const d of datesInRange(from, to)) if (locked.has(weekKey(e.Id, d))) lockedDays.add(`${e.Id}|${d}`);
     const plan = planBatch({
+      lockedDays,
       employees: employees.map((e) => ({
         id: e.Id,
         isInactive: e.Status === 'Inactive',
@@ -394,7 +531,9 @@ export class TimeEntryService {
         startPeriod: l.StartPeriod,
         endPeriod: l.EndPeriod,
       })),
-      declared: new Set(declared.map((d) => declaredKey(d.EmployeeId, keyOf(d.Date)))),
+      // Un panier ou une permanence : une fois par jour. Une saisie de travail peut
+      // s'ajouter a une autre le meme jour ; le chevauchement est controle ligne par ligne.
+      declared: new Set(oncePerDay ? declared.map((d) => declaredKey(d.EmployeeId, keyOf(d.Date))) : []),
       today: todayKey(),
     });
     if (plan.toCreate.length > BATCH_MAX_ENTRIES) {
@@ -404,26 +543,213 @@ export class TimeEntryService {
     }
     if (dto.DryRun) return this.batchReport(employees, plan, true, 0, []);
 
+    // Memes controles que l'envoi en lignes : une journee en conflit est ecartee.
+    const sent = await this.createLines(
+      {
+        Lines: plan.toCreate.map((item) => ({
+          EmployeeId: item.employeeId,
+          Date: item.dateKey,
+          EntryType: dto.EntryType,
+          ...(oncePerDay ? {} : { StartTime: dto.StartTime, EndTime: dto.EndTime, Hours: dto.Hours }),
+          Comments: dto.Comments,
+        })),
+      },
+      actorId,
+      permissions,
+    );
+    const failures = sent.Lines.filter((l) => l.Action !== 'create').map((l) => ({
+      employeeId: plan.toCreate[l.Index]!.employeeId,
+      dateKey: plan.toCreate[l.Index]!.dateKey,
+      message: l.Message ?? 'Non créée',
+    }));
+    return this.batchReport(employees, plan, false, sent.Created, failures);
+  }
+
+  // ── Saisie par lignes (lot ajuste ou fichier importe) ────────────────────
+
+  // Chaque ligne est un employe, un jour et une periode. Une ligne qui chevauche
+  // une saisie existante n'est creee que si le choix est fait (OnConflict) : rien
+  // n'est ecrase en silence. Un manager ne traite que les lignes de son equipe.
+  async createLines(dto: CreateTimeEntryLinesDto, actorId: string, permissions: Set<string>) {
+    const scope = await this.scopeOf(actorId, permissions);
+    const ids = [...new Set(dto.Lines.map((l) => l.EmployeeId).filter((v): v is string => !!v))];
+    const numbers = [...new Set(dto.Lines.map((l) => l.EmployeeNumber?.trim()).filter((v): v is string => !!v))];
+    const employees = await this.prisma.employee.findMany({
+      where: { IsDeleted: false, IsSystem: false, OR: [{ Id: { in: ids } }, { EmployeeNumber: { in: numbers } }] },
+      select: {
+        Id: true,
+        FullName: true,
+        EmployeeNumber: true,
+        Status: true,
+        HireDate: true,
+        TerminationDate: true,
+        OrganizationUnitId: true,
+        DirectValidatorId: true,
+      },
+    });
+    const poolByUnit = new Map<string, boolean>();
+    for (const e of employees) {
+      if (e.DirectValidatorId || poolByUnit.has(e.OrganizationUnitId)) continue;
+      const pool = await this.approvalPools.findApplicablePool(e.OrganizationUnitId, ENTITY_TYPE);
+      poolByUnit.set(e.OrganizationUnitId, !!pool && pool.members.length > 0);
+    }
+    const byId = new Map(employees.map((e) => [e.Id.toLowerCase(), e]));
+    const byNumber = new Map(employees.map((e) => [e.EmployeeNumber.toLowerCase(), e]));
+
+    const lines: PlannedLine[] = dto.Lines.map((l) => {
+      const found = l.EmployeeId ? byId.get(l.EmployeeId.toLowerCase()) : byNumber.get((l.EmployeeNumber ?? '').trim().toLowerCase());
+      const dateKey = (l.Date ?? '').slice(0, 10);
+      const line: PlannedLine = {
+        employee: found
+          ? {
+              id: found.Id,
+              name: found.FullName,
+              number: found.EmployeeNumber,
+              isInactive: found.Status === 'Inactive',
+              hireDate: found.HireDate ? keyOf(found.HireDate) : null,
+              terminationDate: found.TerminationDate ? keyOf(found.TerminationDate) : null,
+              hasRoute: !!found.DirectValidatorId || poolByUnit.get(found.OrganizationUnitId) === true,
+            }
+          : null,
+        dateKey,
+        slot: null,
+        onConflict: l.OnConflict,
+      };
+      try {
+        line.slot = slotFrom(l.EntryType, lineTimes(dateKey, l));
+      } catch (err) {
+        line.invalid = err instanceof Error ? err.message : String(err);
+      }
+      return line;
+    });
+
+    const employeeIds = employees.map((e) => e.Id);
+    const dates = lines.map((l) => l.dateKey).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    const from = dates[0] ?? todayKey();
+    const to = dates[dates.length - 1] ?? from;
+    const range = { gte: toDate(from), lte: toDate(to) };
+    const [existing, punches, leaves] = await Promise.all([
+      this.prisma.timeManualEntry.findMany({
+        where: { EmployeeId: { in: employeeIds }, Status: { in: ['Pending', 'Approved'] }, Date: range },
+        select: { Id: true, EmployeeId: true, Date: true, EntryType: true, Status: true, FirstClockIn: true, LastClockOut: true, Hours: true },
+      }),
+      this.prisma.timeMorphoRecord.findMany({
+        where: { EmployeeId: { in: employeeIds }, DateJour: range },
+        select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
+      }),
+      this.prisma.leaveRequest.findMany({
+        where: {
+          EmployeeId: { in: employeeIds },
+          Status: { in: TAKEN_LEAVE_STATUSES },
+          IsDeleted: false,
+          StartDate: { lte: toDate(to) },
+          EndDate: { gte: toDate(from) },
+        },
+        select: { EmployeeId: true, StartDate: true, EndDate: true, StartPeriod: true, EndPeriod: true },
+      }),
+    ]);
+    const leaveDays = new Set<string>();
+    for (const l of leaves) {
+      const leave = { employeeId: l.EmployeeId, start: keyOf(l.StartDate), end: keyOf(l.EndDate), startPeriod: l.StartPeriod, endPeriod: l.EndPeriod };
+      for (const d of dates) if (isFullLeaveDay(leave, d)) leaveDays.add(`${l.EmployeeId}|${d}`);
+    }
+
+    const locked = await validatedWeeks(this.prisma, employeeIds, from, to);
+    const lockedDays = new Set<string>();
+    for (const e of employees) for (const d of dates) if (locked.has(weekKey(e.Id, d))) lockedDays.add(`${e.Id}|${d}`);
+    const results = planLines({
+      lines,
+      scope,
+      lockedDays,
+      actorId,
+      today: todayKey(),
+      leaveDays,
+      existing: existing.map(
+        (e): ExistingEntry => ({
+          ...toSlot(e),
+          id: e.Id,
+          employeeId: e.EmployeeId,
+          dateKey: keyOf(e.Date),
+          status: e.Status as ExistingEntry['status'],
+        }),
+      ),
+      punches: punches.map((p) => ({
+        employeeId: p.EmployeeId!,
+        dateKey: keyOf(p.DateJour),
+        start: minutesOf(p.PremierPointage)!,
+        end: minutesOf(p.DernierPointage)!,
+      })),
+    });
+    if (dto.DryRun) return this.linesReport(lines, results, scope, true);
+
     const digest: NotificationDigest = { toValidate: new Map(), coApprovers: new Map(), approved: new Map() };
-    const failures: { employeeId: string; dateKey: string; message: string }[] = [];
-    let created = 0;
-    for (const item of plan.toCreate) {
+    for (const result of results) {
+      if (result.action !== 'create' && result.action !== 'replace') continue;
+      const source = dto.Lines[result.index]!;
+      const line = lines[result.index]!;
       try {
         await this.createOne(
-          { employeeId: item.employeeId, date: item.dateKey, times: timesOn(item.dateKey), entryType: dto.EntryType, comments: dto.Comments },
+          {
+            employeeId: line.employee!.id,
+            date: line.dateKey,
+            times: lineTimes(line.dateKey, source),
+            entryType: source.EntryType,
+            comments: source.Comments,
+            source: dto.Source,
+          },
           actorId,
           digest,
         );
-        created++;
+        // La nouvelle saisie existe : les anciennes peuvent etre retirees.
+        for (const id of result.replaceIds) await this.retire(id, actorId, 'Remplacée par une nouvelle saisie');
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`Saisie en lot : journée ${item.dateKey} non créée pour ${item.employeeId} : ${message}`);
-        failures.push({ ...item, message: err instanceof HttpException ? message : 'Erreur technique' });
+        this.logger.warn(`Saisie par lignes : ligne ${result.index + 1} non créée : ${message}`);
+        result.action = 'error';
+        result.message = err instanceof HttpException ? message : 'Erreur technique';
       }
     }
     if (digest.approved.size > 0) await this.refreshDailyHours([...digest.approved.keys()], from, to);
     await this.sendDigest(digest, from, to);
-    return this.batchReport(employees, plan, false, created, failures);
+    return this.linesReport(lines, results, scope, false);
+  }
+
+  private linesReport(lines: PlannedLine[], results: LineResult[], scope: Set<string> | null, dryRun: boolean) {
+    return {
+      DryRun: dryRun,
+      Created: dryRun ? 0 : results.filter((r) => r.action === 'create' || r.action === 'replace').length,
+      Lines: results.map((r) => {
+        const employee = lines[r.index]!.employee;
+        // Hors perimetre : aucun nom n'est renvoye.
+        const visible = employee && (!scope || scope.has(employee.id)) ? employee : null;
+        return {
+          Index: r.index,
+          Action: r.action,
+          Message: r.message ?? null,
+          Warnings: r.warnings,
+          CanReplace: r.canReplace,
+          EmployeeId: visible?.id ?? null,
+          EmployeeName: visible?.name ?? null,
+          EmployeeNumber: visible?.number ?? null,
+        };
+      }),
+    };
+  }
+
+  // Retire une saisie en attente (annulation ou remplacement), avec sa decision.
+  private async retire(id: string, actorId: string, comment: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.approvalDecision.updateMany({
+        where: { EntityType: ENTITY_TYPE, EntityId: id, Decision: 'Pending' },
+        data: { Decision: 'Cancelled', DecidedAt: new Date() },
+      });
+      await tx.timeManualEntryHistory.create({ data: { EntryId: id, Action: 'UPDATE', ActorId: actorId, Comment: comment } });
+      return tx.timeManualEntry.update({
+        where: { Id: id },
+        data: { Status: 'Cancelled', CurrentApprovalStep: null, ModifiedAt: new Date() },
+        include: INCLUDE,
+      });
+    });
   }
 
   private batchReport(
@@ -437,6 +763,8 @@ export class TimeEntryService {
       DryRun: dryRun,
       Planned: plan.toCreate.length,
       Created: created,
+      // Journees retenues : l'ecran les propose a l'ajustement avant l'envoi en lignes.
+      Lines: plan.toCreate.map((l) => ({ EmployeeId: l.employeeId, Date: l.dateKey })),
       Employees: employees.map((e) => {
         const skipped = new Map<string, string[]>();
         const add = (reason: string, dateKey: string) => skipped.set(reason, [...(skipped.get(reason) ?? []), dateKey]);
@@ -473,17 +801,18 @@ export class TimeEntryService {
     return entry;
   }
 
-  private assertOwnerOrHr(entry: { EmployeeId: string; SubmittedById: string }, actorId: string, isHr: boolean) {
-    if (!isHr && entry.EmployeeId !== actorId && entry.SubmittedById !== actorId) {
-      throw new ForbiddenException('Vous ne pouvez modifier que vos propres saisies');
-    }
+  // La personne concernee, celle qui a saisi, son manager ou le RH.
+  private async assertCanEdit(entry: { EmployeeId: string; SubmittedById: string }, actorId: string, permissions: Set<string>) {
+    if (permissions.has('TEMPS_ACCES') || entry.EmployeeId === actorId || entry.SubmittedById === actorId) return;
+    if (permissions.has('TEMPS_VALIDER') && (await this.calculation.teamEmployeeIds(actorId)).includes(entry.EmployeeId)) return;
+    throw new ForbiddenException('Vous ne pouvez modifier que vos saisies et celles de votre équipe');
   }
 
   // Modification d'une saisie en attente ou refusee : elle repart dans le circuit.
   async update(id: string, dto: UpdateTimeEntryDto, actorId: string, permissions: Set<string>) {
-    const isHr = permissions.has('TEMPS_ACCES');
     const existing = await this.findRaw(id);
-    this.assertOwnerOrHr(existing, actorId, isHr);
+    await this.assertCanEdit(existing, actorId, permissions);
+    const isHr = permissions.has('TEMPS_ACCES') || existing.EmployeeId !== actorId;
     if (existing.Status !== 'Pending' && existing.Status !== 'Rejected') {
       throw new BadRequestException(`Une saisie "${existing.Status}" ne peut plus être modifiée`);
     }
@@ -491,11 +820,17 @@ export class TimeEntryService {
     const newType = dto.EntryType ?? existing.EntryType ?? 'mission';
     this.assertWindow(keyOf(existing.Date), isHr);
     this.assertWindow(newDate, isHr);
+    await assertWeekOpen(this.prisma, existing.EmployeeId, keyOf(existing.Date));
+    await assertWeekOpen(this.prisma, existing.EmployeeId, newDate);
     await this.assertNoDuplicate(existing.EmployeeId, newDate, newType, id);
     // Horaires : s'ils sont modifies, la duree est recalculee ; si seule la duree
     // change, les anciens horaires ne correspondent plus et sont retires.
     const touchesTimes = dto.StartTime !== undefined || dto.EndTime !== undefined || dto.Hours !== undefined;
     const times = touchesTimes ? resolveTimes(newDate, dto.Hours, dto.StartTime, dto.EndTime) : null;
+    const slot = times
+      ? slotFrom(newType, times)
+      : toSlot({ EntryType: newType, FirstClockIn: existing.FirstClockIn, LastClockOut: existing.LastClockOut, Hours: existing.Hours });
+    await this.assertNoOverlap(existing.EmployeeId, newDate, slot, id);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.approvalDecision.updateMany({
@@ -519,20 +854,10 @@ export class TimeEntryService {
 
   async cancel(id: string, actorId: string, permissions: Set<string>) {
     const existing = await this.findRaw(id);
-    this.assertOwnerOrHr(existing, actorId, permissions.has('TEMPS_ACCES'));
+    await this.assertCanEdit(existing, actorId, permissions);
     if (existing.Status !== 'Pending') throw new BadRequestException('Seule une saisie en attente peut être annulée');
-    return this.prisma.$transaction(async (tx) => {
-      await tx.approvalDecision.updateMany({
-        where: { EntityType: ENTITY_TYPE, EntityId: id, Decision: 'Pending' },
-        data: { Decision: 'Cancelled', DecidedAt: new Date() },
-      });
-      await tx.timeManualEntryHistory.create({ data: { EntryId: id, Action: 'UPDATE', ActorId: actorId, Comment: 'Annulée' } });
-      return tx.timeManualEntry.update({
-        where: { Id: id },
-        data: { Status: 'Cancelled', CurrentApprovalStep: null, ModifiedAt: new Date() },
-        include: INCLUDE,
-      });
-    });
+    await assertWeekOpen(this.prisma, existing.EmployeeId, keyOf(existing.Date));
+    return this.retire(id, actorId, 'Annulée');
   }
 
   // ── Decision ──────────────────────────────────────────────────────────────
@@ -579,6 +904,7 @@ export class TimeEntryService {
   async adjust(id: string, dto: AdjustTimeEntryDto, actorId: string, permissions: Set<string>) {
     const existing = await this.findRaw(id);
     await this.assertIsCurrentApprover(existing, actorId, permissions.has('TEMPS_ACCES'));
+    await assertWeekOpen(this.prisma, existing.EmployeeId, keyOf(existing.Date));
     if (existing.EntryType === 'panier' || existing.EntryType === 'permanence') {
       throw new BadRequestException('Cette saisie compte pour 1 par jour : il n\'y a pas d\'heures à ajuster');
     }
@@ -605,6 +931,10 @@ export class TimeEntryService {
   async approve(id: string, dto: DecideTimeEntryDto, approverId: string, permissions: Set<string>) {
     const existing = await this.findRaw(id);
     await this.assertIsCurrentApprover(existing, approverId, permissions.has('TEMPS_ACCES'));
+    if (isIncomplete(existing.EntryType ?? '', existing.FirstClockIn, existing.LastClockOut)) {
+      throw new BadRequestException("Saisie incomplète : renseignez l'heure d'entrée et l'heure de sortie avant d'approuver");
+    }
+    await assertWeekOpen(this.prisma, existing.EmployeeId, keyOf(existing.Date));
     const pending = await this.prisma.approvalDecision.findFirst({
       where: { EntityType: ENTITY_TYPE, EntityId: id, StepOrder: existing.CurrentApprovalStep as number, Decision: 'Pending' },
     });
@@ -649,6 +979,7 @@ export class TimeEntryService {
       await this.notifyCoApprovers(next.coApproverIds, next.approverId, 'Saisie de temps à valider', `${existing.employee.FullName} : saisie du ${keyOf(existing.Date)} (en tant qu'intérimaire).`);
     } else {
       await this.refreshDailyHours([existing.EmployeeId], keyOf(existing.Date), keyOf(existing.Date));
+      await removeControl(this.prisma, existing.EmployeeId, keyOf(existing.Date), approverId, 'Saisie approuvée après le contrôle');
       await this.notify(existing.EmployeeId, 'Saisie de temps approuvée', `Votre saisie du ${keyOf(existing.Date)} est approuvée.`);
     }
     return updated;
@@ -658,6 +989,7 @@ export class TimeEntryService {
     if (!dto.Comment || dto.Comment.trim().length === 0) throw new BadRequestException('Le motif du refus est requis');
     const existing = await this.findRaw(id);
     await this.assertIsCurrentApprover(existing, approverId, permissions.has('TEMPS_ACCES'));
+    await assertWeekOpen(this.prisma, existing.EmployeeId, keyOf(existing.Date));
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.approvalDecision.updateMany({
         where: { EntityType: ENTITY_TYPE, EntityId: id, Decision: 'Pending' },
@@ -711,8 +1043,9 @@ export class TimeEntryService {
     return this.page(this.buildWhere({ ...q, EmployeeId: undefined }, { EmployeeId: employeeId }), q);
   }
 
-  findAll(q: QueryTimeEntriesDto) {
-    return this.page(this.buildWhere(q), q);
+  // Toutes les saisies pour le RH ; les siennes et celles de son equipe pour un manager.
+  async findAll(q: QueryTimeEntriesDto, me: string, permissions: Set<string>) {
+    return this.page({ AND: [await this.readableBase(me, permissions), this.buildWhere(q)] }, q);
   }
 
   // Saisies en attente de MA decision (ou toutes pour le RH).
@@ -737,8 +1070,7 @@ export class TimeEntryService {
   // les saisies du perimetre (toutes pour le RH, les miennes sinon) et les
   // memes filtres que la liste, hors statut.
   async summary(me: string, permissions: Set<string>, q: QueryTimeEntriesDto) {
-    const base: Prisma.TimeManualEntryWhereInput = permissions.has('TEMPS_ACCES') ? {} : { EmployeeId: me };
-    const where = this.buildWhere({ ...q, Status: undefined, ...(permissions.has('TEMPS_ACCES') ? {} : { EmployeeId: undefined }) }, base);
+    const where = { AND: [await this.readableBase(me, permissions), this.buildWhere({ ...q, Status: undefined })] };
     const groups = await this.prisma.timeManualEntry.groupBy({ by: ['Status'], where, _count: { _all: true }, _sum: { Hours: true } });
     const count = (st: string) => groups.find((g) => g.Status === st)?._count._all ?? 0;
     const hours = (st: string) => Number(groups.find((g) => g.Status === st)?._sum.Hours ?? 0);

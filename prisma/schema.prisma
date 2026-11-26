@@ -2182,6 +2182,8 @@ model TimeMorphoImport {
   Status           String   @db.NVarChar(20)
   // TriggeredBy: manual | schedule
   TriggeredBy      String   @db.NVarChar(20)
+  // Employe qui a lance l'import (null : planification automatique).
+  ImportedById     String?  @db.UniqueIdentifier
   TotalRecords     Int      @default(0)
   ProcessedRecords Int      @default(0)
   ErrorCount       Int      @default(0)
@@ -2238,6 +2240,9 @@ model TimeManualEntry {
   FirstClockIn    DateTime? @db.DateTime2
   LastClockOut    DateTime? @db.DateTime2
   Comments        String?   @db.NVarChar(500)
+  // Origine de la saisie : Manual (a l'ecran) | Import (fichier). Les pointages
+  // de la pointeuse sont dans TimeMorphoRecord.
+  Source          String    @default("Manual") @db.NVarChar(20)
   CreatedAt       DateTime  @default(now()) @db.DateTime2
   ModifiedAt      DateTime? @db.DateTime2
 
@@ -2295,6 +2300,59 @@ model TimeOvertime {
 
   @@index([EmployeeId, Date])
   @@index([CodeId])
+}
+
+/// Correction d'un jour par un manager ou le RH (ecran de validation
+/// hebdomadaire). Les pointages et saisies d'origine restent intacts.
+model TimeDayCorrection {
+  Id         String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId String   @db.UniqueIdentifier
+  Date       DateTime @db.Date
+  // JSON des paires entree / sortie ; null : pointages non corriges.
+  Punches    String?  @db.NVarChar(Max)
+  // Heures declarees sans horaires, conservees avec la correction.
+  ExtraHours Decimal  @default(0) @db.Decimal(6, 2)
+  // null : calcul automatique.
+  Panier       Boolean?
+  Permanence   Boolean?
+  ModifiedById String   @db.UniqueIdentifier
+  ModifiedAt   DateTime @default(now()) @db.DateTime2
+
+  @@unique([EmployeeId, Date])
+  @@index([Date])
+}
+
+/// Etat d'une semaine : controlee par le manager, puis validee par le RH (jours
+/// figes, plus de modification). Aucune ligne : semaine ouverte.
+model TimeWeekValidation {
+  Id         String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId String   @db.UniqueIdentifier
+  WeekStart  DateTime @db.Date
+  // Status: Controlled | Validated
+  Status         String    @db.NVarChar(20)
+  ControlledById String?   @db.UniqueIdentifier
+  ControlledAt   DateTime? @db.DateTime2
+  ValidatedById  String?   @db.UniqueIdentifier
+  ValidatedAt    DateTime? @db.DateTime2
+  // JSON des jours figes a la validation.
+  Snapshot       String?   @db.NVarChar(Max)
+
+  @@unique([EmployeeId, WeekStart])
+  @@index([WeekStart])
+}
+
+/// Journal d'une semaine : corrections, controle, validation, reouverture.
+model TimeWeekHistory {
+  Id         String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId String   @db.UniqueIdentifier
+  WeekStart  DateTime @db.Date
+  // Action: CORRECT | CONTROL | UNCONTROL | VALIDATE | REOPEN
+  Action    String   @db.NVarChar(20)
+  ActorId   String   @db.UniqueIdentifier
+  Comment   String?  @db.NVarChar(500)
+  CreatedAt DateTime @default(now()) @db.DateTime2
+
+  @@index([EmployeeId, WeekStart])
 }
 
 /// Correspondance ancien id (base Pointage) -> Id HRM, pour que la migration

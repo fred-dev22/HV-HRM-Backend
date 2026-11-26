@@ -22,8 +22,13 @@ describe('resolveTimes', () => {
     expect(() => resolveTimes('2026-11-02', undefined)).toThrow(BadRequestException);
   });
 
-  it('refuse un seul horaire, ou une fin avant le debut', () => {
-    expect(() => resolveTimes('2026-11-02', undefined, '08:00', undefined)).toThrow(BadRequestException);
+  it("accepte une entree ou une sortie seule, sans duree (a completer)", () => {
+    expect(resolveTimes('2026-11-02', undefined, '08:00', undefined)).toEqual({ hours: 0, clockIn: new Date('2026-11-02T08:00:00'), clockOut: null });
+    expect(resolveTimes('2026-11-02', undefined, undefined, '17:00')).toMatchObject({ hours: 0, clockIn: null });
+    expect(() => resolveTimes('2026-11-02', 4, '08:00', undefined)).toThrow(BadRequestException);
+  });
+
+  it('refuse une fin avant le debut', () => {
     expect(() => resolveTimes('2026-11-02', undefined, '18:00', '08:00')).toThrow(BadRequestException);
     expect(() => resolveTimes('2026-11-02', undefined, '08:00', '08:00')).toThrow(BadRequestException);
   });

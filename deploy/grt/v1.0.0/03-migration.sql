@@ -1,5 +1,5 @@
 -- GRT : script de migration unique (a jouer apres 01-schema.sql et 02-seed.sql, avant de demarrer
--- le nouveau backend). Il regroupe six evolutions, dans cet ordre :
+-- le nouveau backend). Il regroupe huit evolutions, dans cet ordre :
 --   1) Messagerie : table MailSettings (configuration des emails dans l'application, Graph ou SMTP).
 --   2) Regime de conge annuel : Employee.LeaveRegime (Calendar | Working) et
 --      LeaveType.AppliesToLeaveRegime, pour les deux types de conge annuel (32 j calendaires,
@@ -9,6 +9,8 @@
 --   5) Stockage des fichiers : table StorageSettings et colonne Attachment.StorageProvider.
 --   6) Temps de travail : samedis et dimanches travailles comptes, plafond non imposable par
 --      employe, panier reserve au service continu.
+--   7) Saisies de temps : origine (ecran ou fichier) et auteur des imports de la pointeuse.
+--   8) Validation hebdomadaire : corrections de jours, controle et validation des semaines.
 -- Chaque partie est transactionnelle et rejouable. Rejouer le fichier remet les reglages des parties
 -- 4 et 6 a leur valeur ci-dessous, meme s'ils ont ete changes depuis dans l'application.
 -- Seules donnees modifiees : des reglages du temps de travail. Aucun solde, employe ou type de conge n'est touche.
@@ -243,6 +245,109 @@ IF NOT EXISTS (SELECT 1 FROM dbo.TimeSetting WHERE [Key] = N'panier_requires_con
 
 COMMIT TRAN;
 PRINT N'Script (regles du temps de travail) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO
+
+-- ============================================================================
+-- Saisies de temps : TimeManualEntry.Source (Manual : saisie a l'ecran, Import :
+-- fichier) et TimeMorphoImport.ImportedById (qui a importe la pointeuse).
+-- Les saisies existantes sont marquees Manual. Rejouable sans effet.
+-- ============================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+BEGIN TRY
+BEGIN TRAN;
+
+IF COL_LENGTH('dbo.TimeManualEntry', 'Source') IS NULL
+    ALTER TABLE dbo.TimeManualEntry
+        ADD [Source] NVARCHAR(20) NOT NULL CONSTRAINT [TimeManualEntry_Source_df] DEFAULT 'Manual';
+IF COL_LENGTH('dbo.TimeMorphoImport', 'ImportedById') IS NULL
+    ALTER TABLE dbo.TimeMorphoImport ADD [ImportedById] UNIQUEIDENTIFIER NULL;
+
+COMMIT TRAN;
+PRINT N'Script (origine des saisies de temps) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO
+
+-- ============================================================================
+-- Validation hebdomadaire des temps : corrections de jours (les pointages
+-- d'origine restent intacts), etat et journal des semaines. Ajoute le reglage
+-- require_week_validation (0 : desactive). Rejouable sans effet.
+-- ============================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+BEGIN TRY
+BEGIN TRAN;
+
+IF OBJECT_ID(N'dbo.TimeDayCorrection', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[TimeDayCorrection] (
+        [Id] UNIQUEIDENTIFIER NOT NULL,
+        [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+        [Date] DATE NOT NULL,
+        [Punches] NVARCHAR(max),
+        [ExtraHours] DECIMAL(6,2) NOT NULL CONSTRAINT [TimeDayCorrection_ExtraHours_df] DEFAULT 0,
+        [Panier] BIT,
+        [Permanence] BIT,
+        [ModifiedById] UNIQUEIDENTIFIER NOT NULL,
+        [ModifiedAt] DATETIME2 NOT NULL CONSTRAINT [TimeDayCorrection_ModifiedAt_df] DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT [TimeDayCorrection_pkey] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [TimeDayCorrection_EmployeeId_Date_key] UNIQUE NONCLUSTERED ([EmployeeId],[Date])
+    );
+    CREATE NONCLUSTERED INDEX [TimeDayCorrection_Date_idx] ON [dbo].[TimeDayCorrection]([Date]);
+END;
+
+IF OBJECT_ID(N'dbo.TimeWeekValidation', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[TimeWeekValidation] (
+        [Id] UNIQUEIDENTIFIER NOT NULL,
+        [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+        [WeekStart] DATE NOT NULL,
+        [Status] NVARCHAR(20) NOT NULL,
+        [ControlledById] UNIQUEIDENTIFIER,
+        [ControlledAt] DATETIME2,
+        [ValidatedById] UNIQUEIDENTIFIER,
+        [ValidatedAt] DATETIME2,
+        [Snapshot] NVARCHAR(max),
+        CONSTRAINT [TimeWeekValidation_pkey] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [TimeWeekValidation_EmployeeId_WeekStart_key] UNIQUE NONCLUSTERED ([EmployeeId],[WeekStart])
+    );
+    CREATE NONCLUSTERED INDEX [TimeWeekValidation_WeekStart_idx] ON [dbo].[TimeWeekValidation]([WeekStart]);
+END;
+
+IF OBJECT_ID(N'dbo.TimeWeekHistory', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[TimeWeekHistory] (
+        [Id] UNIQUEIDENTIFIER NOT NULL,
+        [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+        [WeekStart] DATE NOT NULL,
+        [Action] NVARCHAR(20) NOT NULL,
+        [ActorId] UNIQUEIDENTIFIER NOT NULL,
+        [Comment] NVARCHAR(500),
+        [CreatedAt] DATETIME2 NOT NULL CONSTRAINT [TimeWeekHistory_CreatedAt_df] DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT [TimeWeekHistory_pkey] PRIMARY KEY CLUSTERED ([Id])
+    );
+    CREATE NONCLUSTERED INDEX [TimeWeekHistory_EmployeeId_WeekStart_idx] ON [dbo].[TimeWeekHistory]([EmployeeId], [WeekStart]);
+END;
+
+IF NOT EXISTS (SELECT 1 FROM dbo.TimeSetting WHERE [Key] = N'require_week_validation')
+    INSERT INTO dbo.TimeSetting ([Id], [Key], [Value], [Label])
+    VALUES (NEWID(), N'require_week_validation', 0, N'Payer seulement les semaines validées (1 = oui)');
+
+COMMIT TRAN;
+PRINT N'Script (validation hebdomadaire) applique.';
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;

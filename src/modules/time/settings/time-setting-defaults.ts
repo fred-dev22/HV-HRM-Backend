@@ -11,6 +11,8 @@ export const TIME_SETTINGS: { Key: string; Value: number; Label: string }[] = [
   { Key: 'overtime_legal_cap_hours', Value: 80, Label: "Plafond légal mensuel d'heures supplémentaires" },
   // 0 = un plafond par employe, 1 = un seul plafond pour toute l'entreprise (comme le systeme Pointage).
   { Key: 'monthly_ni_cap_company_wide', Value: 0, Label: "Plafond non imposable partagé par toute l'entreprise (1 = oui)" },
+  // Validation hebdomadaire : 1 = seules les semaines validees par le RH partent en paie.
+  { Key: 'require_week_validation', Value: 0, Label: 'Payer seulement les semaines validées (1 = oui)' },
   // Calcul a la semaine uniquement (au-dela de 40 h). Valeur informative : le moteur ne la lit plus.
   { Key: 'overtime_method', Value: 1, Label: 'Méthode de calcul des heures supplémentaires' },
   // Panier : service continu exige (retour client du 23/07).

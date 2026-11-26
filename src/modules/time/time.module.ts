@@ -10,13 +10,15 @@ import { MorphoController } from './morpho/morpho.controller';
 import { MorphoService } from './morpho/morpho.service';
 import { TimeSettingsController } from './settings/time-settings.controller';
 import { TimeSettingsService } from './settings/time-settings.service';
+import { TimeWeekController } from './weeks/time-week.controller';
+import { TimeWeekService } from './weeks/time-week.service';
 
 // Module Temps de travail (pointage, saisies de temps, heures supplementaires,
 // export Sage). Desactivable par client (cle 'time' de brand/client.json).
 // PrismaModule est @Global. Enregistre dans app.module.ts.
 @Module({
   imports: [CalendarModule, NotificationModule, ApprovalPoolModule],
-  controllers: [TimeSettingsController, MorphoController, TimeCalculationController, TimeEntryController],
-  providers: [TimeSettingsService, TimeCalculationService, MorphoService, TimeEntryService],
+  controllers: [TimeSettingsController, MorphoController, TimeCalculationController, TimeEntryController, TimeWeekController],
+  providers: [TimeSettingsService, TimeCalculationService, MorphoService, TimeEntryService, TimeWeekService],
 })
 export class TimeModule {}

@@ -63,7 +63,8 @@ describe('saisies approuvees et pointeuse reunies', () => {
       prisma: unknown;
       loadWorkRecords(from: string, to: string, ids?: string[]): Promise<unknown>;
     };
-    service.prisma = { timeMorphoRecord: { findMany: jest.fn().mockResolvedValue([]) }, timeManualEntry: { findMany: entries } };
+    const none = { findMany: jest.fn().mockResolvedValue([]) };
+    service.prisma = { timeMorphoRecord: none, timeManualEntry: { findMany: entries }, timeDayCorrection: none, timeWeekValidation: none };
     await service.loadWorkRecords(MON, SUN, ['E1']);
     expect(entries.mock.calls[0][0].where).toMatchObject({
       Status: 'Approved',

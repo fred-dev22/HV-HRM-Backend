@@ -10,6 +10,8 @@ describe('TimeEntryService.createBatch', () => {
     TerminationDate: null, OrganizationUnitId: 'unit', DirectValidatorId: validator,
   });
 
+  const HR = new Set(['TEMPS_ACCES']);
+
   beforeAll(() => jest.useFakeTimers({ now: new Date('2026-11-25T10:00:00Z') }));
   afterAll(() => jest.useRealTimers());
 
@@ -30,7 +32,9 @@ describe('TimeEntryService.createBatch', () => {
         findUnique: jest.fn().mockResolvedValue({ ValidatorInterimId: null }),
       },
       leaveRequest: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn().mockResolvedValue(null) },
-      timeManualEntry: { findMany: jest.fn().mockResolvedValue([]), delete: jest.fn() },
+      timeManualEntry: { findMany: jest.fn().mockResolvedValue([]), findUnique: jest.fn().mockResolvedValue(null), delete: jest.fn() },
+      timeMorphoRecord: { findMany: jest.fn().mockResolvedValue([]) },
+      timeWeekValidation: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
       timeManualEntryHistory: { deleteMany: jest.fn() },
       $transaction: jest.fn(async (fn: (t: unknown) => unknown) => fn(tx)),
     };
@@ -47,7 +51,7 @@ describe('TimeEntryService.createBatch', () => {
 
   it('le controle ne cree rien et annonce le nombre de saisies', async () => {
     const { service, created, notifications } = build();
-    const r = await service.createBatch(dto({ DryRun: true }), 'rh');
+    const r = await service.createBatch(dto({ DryRun: true }), 'rh', HR);
     expect(r).toMatchObject({ DryRun: true, Planned: 6, Created: 0 });
     expect(created).toHaveLength(0);
     expect(notifications.create).not.toHaveBeenCalled();
@@ -55,7 +59,7 @@ describe('TimeEntryService.createBatch', () => {
 
   it('cree chaque journee et ne notifie le validateur qu une fois', async () => {
     const { service, created, notifications } = build();
-    const r = await service.createBatch(dto(), 'rh');
+    const r = await service.createBatch(dto(), 'rh', HR);
     expect(r.Created).toBe(6);
     expect(created.every((c) => c.Hours === 1 && c.SubmittedById === 'rh')).toBe(true);
     expect(notifications.create).toHaveBeenCalledTimes(1);
@@ -64,26 +68,56 @@ describe('TimeEntryService.createBatch', () => {
 
   it('panier : les horaires envoyes sont ignores', async () => {
     const { service, created } = build();
-    await service.createBatch(dto({ StartTime: '08:00', EndTime: '17:00', Hours: 9 }), 'rh');
+    await service.createBatch(dto({ StartTime: '08:00', EndTime: '17:00', Hours: 9 }), 'rh', HR);
     expect(created[0]).toMatchObject({ Hours: 1, FirstClockIn: null, LastClockOut: null });
   });
 
   it('une mission demande une duree ou des horaires', async () => {
     const { service, created } = build();
-    await expect(service.createBatch(dto({ EntryType: 'mission' }), 'rh')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.createBatch(dto({ EntryType: 'mission' }), 'rh', HR)).rejects.toBeInstanceOf(BadRequestException);
     expect(created).toHaveLength(0);
   });
 
   it('un employe sans circuit est ecarte avec son motif, les autres passent', async () => {
     const { service } = build([employee('a'), employee('b', null)]);
-    const r = await service.createBatch(dto(), 'rh');
+    const r = await service.createBatch(dto(), 'rh', HR);
     expect(r.Created).toBe(3);
     expect(r.Employees[1]).toMatchObject({ Planned: 0, Skipped: [{ Reason: 'Aucun circuit de validation' }] });
   });
 
   it('refuse un employe introuvable et une periode trop longue', async () => {
     const { service } = build([employee('a')]);
-    await expect(service.createBatch(dto(), 'rh')).rejects.toBeInstanceOf(NotFoundException);
-    await expect(service.createBatch(dto({ From: '2026-11-01', To: '2027-02-01' }), 'rh')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.createBatch(dto(), 'rh', HR)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(service.createBatch(dto({ From: '2026-11-01', To: '2027-02-01' }), 'rh', HR)).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+// Plusieurs periodes le meme jour sont permises (reunion du 25/11).
+describe('TimeEntryService.createBatch : journees deja declarees', () => {
+  const day = (key: string) => new Date(`${key}T00:00:00Z`);
+  const build = () => {
+    const prisma = {
+      employee: { findMany: jest.fn().mockResolvedValue([{ Id: 'a', FullName: 'A', EmployeeNumber: 'a', Status: 'Active', HireDate: null, TerminationDate: null, OrganizationUnitId: 'u', DirectValidatorId: 'v' }]) },
+      leaveRequest: { findMany: jest.fn().mockResolvedValue([]) },
+      timeWeekValidation: { findMany: jest.fn().mockResolvedValue([]) },
+      timeManualEntry: { findMany: jest.fn().mockResolvedValue([{ EmployeeId: 'a', Date: day('2026-11-02') }]) },
+    };
+    const calculation = { holidayKeysByEmployee: jest.fn().mockResolvedValue(new Map()) };
+    return new TimeEntryService(prisma as never, {} as never, {} as never, calculation as never);
+  };
+  const dto = (EntryType: 'mission' | 'panier') => ({
+    EmployeeIds: ['a'], From: '2026-11-02', To: '2026-11-02', Weekdays: [1], EntryType, StartTime: '13:00', EndTime: '17:00', DryRun: true,
+  });
+  const HR = new Set(['TEMPS_ACCES']);
+
+  beforeAll(() => jest.useFakeTimers({ now: new Date('2026-11-25T10:00:00Z') }));
+  afterAll(() => jest.useRealTimers());
+
+  it('un travail reste propose, controle ensuite ligne par ligne', async () => {
+    expect((await build().createBatch(dto('mission'), 'rh', HR)).Lines).toEqual([{ EmployeeId: 'a', Date: '2026-11-02' }]);
+  });
+
+  it('un panier deja declare est ecarte', async () => {
+    expect((await build().createBatch(dto('panier'), 'rh', HR)).Lines).toEqual([]);
   });
 });

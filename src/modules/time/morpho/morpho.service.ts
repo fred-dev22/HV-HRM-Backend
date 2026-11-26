@@ -112,7 +112,7 @@ export class MorphoService implements OnModuleInit {
       }
       try {
         const parsed = await parseMorphoWorkbook(path.join(config.FolderPath, fileName));
-        const result = await this.persist(fileName, parsed.rows, parsed.errors, triggeredBy);
+        const result = await this.persist(fileName, parsed.rows, parsed.errors, triggeredBy, actorEmployeeId);
         summary.imported++;
         summary.unmatchedRows += result.unmatched;
         touched.push(...result.dateKeys);
@@ -121,7 +121,7 @@ export class MorphoService implements OnModuleInit {
         summary.failed++;
         const message = err instanceof Error ? err.message : String(err);
         await this.prisma.timeMorphoImport.create({
-          data: { FileName: fileName, Status: 'Failed', TriggeredBy: triggeredBy, ErrorDetails: message },
+          data: { FileName: fileName, Status: 'Failed', TriggeredBy: triggeredBy, ImportedById: actorEmployeeId, ErrorDetails: message },
         });
         summary.details.push({ fileName, status: 'failed', message });
       }
@@ -144,7 +144,7 @@ export class MorphoService implements OnModuleInit {
     }
     try {
       const parsed = await parseMorphoWorkbook(buffer);
-      const result = await this.persist(fileName, parsed.rows, parsed.errors, 'manual');
+      const result = await this.persist(fileName, parsed.rows, parsed.errors, 'manual', actorEmployeeId);
       summary.imported = 1;
       summary.unmatchedRows = result.unmatched;
       summary.details.push({ fileName, status: 'imported' });
@@ -154,7 +154,7 @@ export class MorphoService implements OnModuleInit {
       summary.failed = 1;
       summary.details.push({ fileName, status: 'failed', message });
       await this.prisma.timeMorphoImport.create({
-        data: { FileName: fileName, Status: 'Failed', TriggeredBy: 'manual', ErrorDetails: message },
+        data: { FileName: fileName, Status: 'Failed', TriggeredBy: 'manual', ImportedById: actorEmployeeId, ErrorDetails: message },
       });
     }
     await this.notify(actorEmployeeId, summary);
@@ -166,9 +166,10 @@ export class MorphoService implements OnModuleInit {
     rows: ParsedMorphoRow[],
     parseErrors: string[],
     triggeredBy: 'manual' | 'schedule',
+    importedById?: string,
   ): Promise<{ unmatched: number; dateKeys: string[] }> {
     const imp = await this.prisma.timeMorphoImport.create({
-      data: { FileName: fileName, Status: 'Processing', TriggeredBy: triggeredBy },
+      data: { FileName: fileName, Status: 'Processing', TriggeredBy: triggeredBy, ImportedById: importedById },
     });
 
     // Rapprochement : une seule lecture des employes, pas une requete par ligne.

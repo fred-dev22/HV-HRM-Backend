@@ -16,6 +16,7 @@ export const BATCH_SKIP_LABELS = {
   afterTermination: 'Après la date de départ',
   holiday: 'Jour férié',
   leave: 'En congé approuvé',
+  locked: 'Semaine déjà validée',
   duplicate: 'Déjà déclaré ce jour',
 } as const;
 export type BatchSkipReason = keyof typeof BATCH_SKIP_LABELS;
@@ -75,6 +76,8 @@ export function planBatch(input: {
   leaves: BatchLeave[];
   // Journees portant deja une saisie du meme type, en attente ou approuvee.
   declared: Set<string>;
+  // `employe|jour` d'une semaine validee.
+  lockedDays?: Set<string>;
   today: string;
 }): BatchPlan {
   const plan: BatchPlan = { toCreate: [], skipped: [] };
@@ -87,6 +90,7 @@ export function planBatch(input: {
       if (!employee.hasRoute) return 'noRoute';
       // La saisie en lot est reservee au RH : sa fenetre de saisie s'applique.
       if (!isEntryWindowOpen(dateKey, input.today, true)) return 'window';
+      if (input.lockedDays?.has(`${employee.id}|${dateKey}`)) return 'locked';
       if (employee.hireDate && dateKey < employee.hireDate) return 'beforeHire';
       if (employee.terminationDate && dateKey > employee.terminationDate) return 'afterTermination';
       if (!input.includeHolidays && input.holidays.get(employee.id)?.has(dateKey)) return 'holiday';

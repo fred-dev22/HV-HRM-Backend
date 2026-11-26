@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
+  ValidateNested,
   IsArray,
   IsBoolean,
   IsDateString,
@@ -17,7 +18,7 @@ import {
   Min,
 } from 'class-validator';
 
-const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+export const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const TIME_ENTRY_TYPES = [
   'mission',
@@ -112,6 +113,70 @@ export class CreateTimeEntryBatchDto {
   @IsString()
   @MaxLength(500)
   Comments?: string;
+
+  // true : controle seulement, rien n'est cree.
+  @IsOptional()
+  @IsBoolean()
+  DryRun?: boolean;
+}
+
+// Une ligne d'un lot ajuste ou d'un fichier : l'employe par identifiant ou par
+// matricule. Date, horaires et duree sont controles ligne par ligne par le
+// service, pour qu'une ligne fausse ne fasse pas refuser tout l'envoi.
+export class TimeEntryLineDto {
+  @IsOptional()
+  @IsUUID()
+  EmployeeId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  EmployeeNumber?: string;
+
+  @IsString()
+  @MaxLength(30)
+  Date!: string;
+
+  @IsString()
+  @MaxLength(30)
+  EntryType!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  StartTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10)
+  EndTime?: string;
+
+  @IsOptional()
+  @IsNumber()
+  Hours?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  Comments?: string;
+
+  // Choix fait quand la ligne chevauche une saisie existante.
+  @IsOptional()
+  @IsIn(['skip', 'replace'])
+  OnConflict?: 'skip' | 'replace';
+}
+
+export class CreateTimeEntryLinesDto {
+  @IsArray()
+  @ArrayNotEmpty({ message: 'Aucune ligne à traiter' })
+  @ArrayMaxSize(1000, { message: 'Pas plus de 1000 lignes par envoi' })
+  @ValidateNested({ each: true })
+  @Type(() => TimeEntryLineDto)
+  Lines!: TimeEntryLineDto[];
+
+  @IsOptional()
+  @IsIn(['Manual', 'Import'])
+  Source?: 'Manual' | 'Import';
 
   // true : controle seulement, rien n'est cree.
   @IsOptional()

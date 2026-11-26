@@ -4,6 +4,8 @@ import { CalendarService } from '../../calendar/calendar.service';
 import { TIME_SETTINGS } from '../settings/time-setting-defaults';
 import { OVERTIME_CODES, OVERTIME_ONLY, PANIER_CODE, PERMANENCE_CODE } from './pay-codes';
 import { WORK_ENTRY_TYPES, buildWorkRecords } from './work-records';
+import { DayPunch, FrozenDay, parseJson, recordFromPunches } from './day-punches';
+import { weekKey } from '../weeks/week-lock';
 import {
   DEFAULT_TIME_SETTINGS,
   OvertimeMethod,
@@ -29,7 +31,7 @@ import {
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
 
 // Horaire d'un calendrier, par jour de semaine (0 = dimanche).
-interface Schedule {
+export interface Schedule {
   required: (number | null)[];
   breakHours: number[];
   breaks: ({ start: string; end: string } | null)[];
@@ -49,6 +51,8 @@ export interface OvertimeResult {
   // Methode effectivement utilisee (journaliere ou hebdomadaire).
   method: OvertimeMethod;
   period: { from: string; to: string };
+  // Semaines ecartees faute de validation (reglage "payer les semaines validees").
+  unvalidatedWeeks: number;
   // Present quand le calcul ne porte que sur un code (mode par code).
   code?: string;
 }
@@ -111,13 +115,13 @@ export class TimeCalculationService {
     };
   }
 
-  private async loadPermanenceRates(): Promise<PermanenceRates> {
+  async loadPermanenceRates(): Promise<PermanenceRates> {
     const rows = await this.prisma.timePermanenceRate.findMany();
     const rate = (type: string) => Number(rows.find((r) => r.DayType === type)?.Amount ?? 0);
     return { OUVRABLE: rate('OUVRABLE'), SAMEDI: rate('SAMEDI'), DIMANCHE_FERIE: rate('DIMANCHE_FERIE') };
   }
 
-  private async loadEmployees(ids?: string[]): Promise<Map<string, EmployeeContext>> {
+  async loadEmployees(ids?: string[]): Promise<Map<string, EmployeeContext>> {
     const rows = await this.prisma.employee.findMany({
       where: { IsDeleted: false, ...(ids ? { Id: { in: ids } } : {}) },
       select: {
@@ -148,7 +152,7 @@ export class TimeCalculationService {
 
   // Ascendants de chaque entite (elle-meme incluse), pour les jours feries
   // cibles sur une entite.
-  private async loadOrganizationAncestors(): Promise<Map<string, Set<string>>> {
+  async loadOrganizationAncestors(): Promise<Map<string, Set<string>>> {
     const units = await this.prisma.organizationUnit.findMany({ select: { Id: true, ParentId: true } });
     const parent = new Map(units.map((u) => [u.Id, u.ParentId]));
     const result = new Map<string, Set<string>>();
@@ -167,7 +171,7 @@ export class TimeCalculationService {
   // Jours feries de la periode qui s'appliquent a UN employe (ciblage par
   // genre, expatrie et entite, comme pour les conges). Un ferie recurrent est
   // reporte sur chaque annee de la periode.
-  private async loadHolidayRows(from: string, to: string) {
+  async loadHolidayRows(from: string, to: string) {
     const all = await this.prisma.holiday.findMany();
     const fromYear = Number(from.slice(0, 4));
     const toYear = Number(to.slice(0, 4));
@@ -186,7 +190,7 @@ export class TimeCalculationService {
     return out;
   }
 
-  private holidaysFor(
+  holidaysFor(
     employee: EmployeeContext,
     rows: Awaited<ReturnType<TimeCalculationService['loadHolidayRows']>>,
     ancestors: Map<string, Set<string>>,
@@ -212,7 +216,7 @@ export class TimeCalculationService {
 
   // Heures prevues par jour de semaine (0 = dimanche) pour un employe, d'apres
   // son calendrier (employe > categorie > global). null = pas de calendrier.
-  private async scheduleOf(
+  async scheduleOf(
     employeeId: string,
     cache: Map<string, Schedule>,
   ) {
@@ -252,7 +256,7 @@ export class TimeCalculationService {
 
   // Temps travaille de la periode, par `employe|jour` : pointeuse et saisies de
   // travail approuvees.
-  private async loadWorkRecords(from: string, to: string, employeeIds?: string[]): Promise<Map<string, ClockRecord>> {
+  async loadWorkRecords(from: string, to: string, employeeIds?: string[]): Promise<Map<string, ClockRecord>> {
     const range = { gte: toDate(from), lte: toDate(to) };
     const [punches, declared] = await Promise.all([
       this.prisma.timeMorphoRecord.findMany({
@@ -269,7 +273,7 @@ export class TimeCalculationService {
         select: { EmployeeId: true, Date: true, Hours: true, FirstClockIn: true, LastClockOut: true },
       }),
     ]);
-    return buildWorkRecords(
+    const records = buildWorkRecords(
       punches.map((p) => ({
         employeeId: p.EmployeeId!,
         dateKey: dateKey(p.DateJour),
@@ -284,13 +288,68 @@ export class TimeCalculationService {
         hours: Number(d.Hours),
       })),
     );
+    const who = employeeIds ? { EmployeeId: { in: employeeIds } } : {};
+    const [corrected, validated] = await Promise.all([
+      this.prisma.timeDayCorrection.findMany({
+        where: { ...who, Date: range, Punches: { not: null } },
+        select: { EmployeeId: true, Date: true, Punches: true, ExtraHours: true },
+      }),
+      this.prisma.timeWeekValidation.findMany({
+        where: { ...who, Status: 'Validated', WeekStart: { gte: toDate(mondayOf(from)), lte: toDate(to) } },
+        select: { EmployeeId: true, Snapshot: true },
+      }),
+    ]);
+    for (const c of corrected) {
+      const day = dateKey(c.Date);
+      records.set(
+        `${c.EmployeeId}|${day}`,
+        recordFromPunches(c.EmployeeId, day, parseJson<DayPunch[]>(c.Punches, []), Number(c.ExtraHours)),
+      );
+    }
+    // Une semaine validee est figee : ses jours passent avant tout le reste.
+    for (const week of validated) {
+      for (const d of parseJson<FrozenDay[]>(week.Snapshot, [])) {
+        if (d.date < from || d.date > to) continue;
+        const key = `${week.EmployeeId}|${d.date}`;
+        if (d.punches.length || d.extraHours) records.set(key, recordFromPunches(week.EmployeeId, d.date, d.punches, d.extraHours));
+        else records.delete(key);
+      }
+    }
+    return records;
+  }
+
+  // Paniers et permanences decides a la validation hebdomadaire, par `employe|jour`
+  // (null : calcul automatique). Une semaine validee les fixe pour ses 7 jours.
+  private async loadAllowanceOverrides(from: string, to: string) {
+    const [corrected, validated] = await Promise.all([
+      this.prisma.timeDayCorrection.findMany({
+        where: { Date: { gte: toDate(from), lte: toDate(to) } },
+        select: { EmployeeId: true, Date: true, Panier: true, Permanence: true },
+      }),
+      this.prisma.timeWeekValidation.findMany({
+        where: { Status: 'Validated', WeekStart: { gte: toDate(mondayOf(from)), lte: toDate(to) } },
+        select: { EmployeeId: true, Snapshot: true },
+      }),
+    ]);
+    const result = new Map<string, { employeeId: string; dateKey: string; panier: boolean | null; permanence: boolean | null }>();
+    for (const c of corrected) {
+      const day = dateKey(c.Date);
+      result.set(`${c.EmployeeId}|${day}`, { employeeId: c.EmployeeId, dateKey: day, panier: c.Panier, permanence: c.Permanence });
+    }
+    for (const week of validated) {
+      for (const d of parseJson<FrozenDay[]>(week.Snapshot, [])) {
+        if (d.date < from || d.date > to) continue;
+        result.set(`${week.EmployeeId}|${d.date}`, { employeeId: week.EmployeeId, dateKey: d.date, panier: d.panier, permanence: d.permanence });
+      }
+    }
+    return result;
   }
 
   // ── T4 : heures du jour ───────────────────────────────────────────────────
 
   // Corrections optionnelles, reglees dans TimeSetting (0/1) ; un parametre
   // explicite de l'appel les remplace.
-  private async loadCorrections(override: { deductBreak?: boolean; includeNonWorkingDays?: boolean }) {
+  async loadCorrections(override: { deductBreak?: boolean; includeNonWorkingDays?: boolean }) {
     const rows = await this.prisma.timeSetting.findMany({ where: { Key: { in: ['deduct_break', 'include_non_working_days'] } } });
     const flag = (key: string) =>
       Number(rows.find((r) => r.Key === key)?.Value ?? TIME_SETTINGS.find((d) => d.Key === key)?.Value ?? 0) === 1;
@@ -447,10 +506,37 @@ export class TimeCalculationService {
 
     const scheduleCache = new Map<string, Schedule>();
     const rates = await this.loadPermanenceRates();
+    const overrides = await this.loadAllowanceOverrides(from, to);
+    // Reglage : seules les semaines validees par le RH partent en paie.
+    const onlyValidated =
+      Number((await this.prisma.timeSetting.findUnique({ where: { Key: 'require_week_validation' } }))?.Value ?? 0) === 1;
+    const validated = onlyValidated
+      ? new Set(
+          (
+            await this.prisma.timeWeekValidation.findMany({
+              where: { Status: 'Validated', WeekStart: { gte: toDate(widenedFrom), lte: toDate(to) } },
+              select: { EmployeeId: true, WeekStart: true },
+            })
+          ).map((v) => weekKey(v.EmployeeId, dateKey(v.WeekStart))),
+        )
+      : null;
+    const skippedWeeks = new Set<string>();
+    const payable = (employeeId: string, day: string) => {
+      if (!validated) return true;
+      const key = weekKey(employeeId, day);
+      if (validated.has(key)) return true;
+      skippedWeeks.add(key);
+      return false;
+    };
     const out: { employeeId: string; dateKey: string; code: string; hours: number }[] = [];
     let excludedCadres = 0;
 
-    const employeeIds = new Set([...dailyRows.map((d) => d.EmployeeId), ...approved.map((a) => a.EmployeeId)]);
+    const forced = [...overrides.values()].filter((o) => o.panier === true || o.permanence === true);
+    const employeeIds = new Set([
+      ...dailyRows.map((d) => d.EmployeeId),
+      ...approved.map((a) => a.EmployeeId),
+      ...forced.map((o) => o.employeeId),
+    ]);
     const extraEmployees = await this.loadEmployees(Array.from(employeeIds).filter((id) => !employees.has(id)));
     for (const [id, e] of extraEmployees) employees.set(id, e);
 
@@ -463,7 +549,7 @@ export class TimeCalculationService {
       }
       const holidays = this.holidaysFor(employee, holidayRows, ancestors);
       const days: DayHours[] = dailyRows
-        .filter((d) => d.EmployeeId === employeeId)
+        .filter((d) => d.EmployeeId === employeeId && payable(employeeId, dateKey(d.Date)))
         .map((d) => ({
           employeeId,
           dateKey: dateKey(d.Date),
@@ -476,10 +562,12 @@ export class TimeCalculationService {
         out.push({ employeeId, dateKey: l.dateKey, code: l.category, hours: l.hours });
       }
 
-      const mine = approved.filter((a) => a.EmployeeId === employeeId);
-      const manualPanier = mine
-        .filter((a) => a.EntryType === 'panier')
-        .map((a) => ({ employeeId, dateKey: dateKey(a.Date) }));
+      const mine = approved.filter((a) => a.EmployeeId === employeeId && payable(employeeId, dateKey(a.Date)));
+      const decided = forced.filter((o) => o.employeeId === employeeId && payable(employeeId, o.dateKey));
+      const manualPanier = [
+        ...mine.filter((a) => a.EntryType === 'panier').map((a) => ({ employeeId, dateKey: dateKey(a.Date) })),
+        ...decided.filter((o) => o.panier === true).map((o) => ({ employeeId, dateKey: o.dateKey })),
+      ];
       const schedule = settings.panierRequiresContinuous ? await this.scheduleOf(employeeId, scheduleCache) : null;
       const continuousHours = settings.panierRequiresContinuous
         ? (day: DayHours) => {
@@ -491,11 +579,17 @@ export class TimeCalculationService {
           }
         : undefined;
       for (const p of computePanierDays(days, manualPanier, settings.panierMinHours, from, to, continuousHours)) {
+        if (overrides.get(`${employeeId}|${p.dateKey}`)?.panier === false) continue;
         out.push({ employeeId, dateKey: p.dateKey, code: PANIER_CODE, hours: 1 });
       }
-      const permanence = mine
-        .filter((a) => a.EntryType === 'permanence')
-        .map((a) => ({ employeeId, dateKey: dateKey(a.Date) }));
+      // Une permanence par jour : saisie approuvee ou cochee a la validation, sauf retiree.
+      const onCall = new Set([
+        ...mine.filter((a) => a.EntryType === 'permanence').map((a) => dateKey(a.Date)),
+        ...decided.filter((o) => o.permanence === true).map((o) => o.dateKey),
+      ]);
+      const permanence = [...onCall]
+        .filter((day) => overrides.get(`${employeeId}|${day}`)?.permanence !== false)
+        .map((day) => ({ employeeId, dateKey: day }));
       for (const p of computePermanenceLines(permanence, holidays, rates)) {
         out.push({ employeeId, dateKey: p.dateKey, code: PERMANENCE_CODE, hours: p.amount });
       }
@@ -542,7 +636,15 @@ export class TimeCalculationService {
 
     const breakdown: Record<string, number> = {};
     for (const l of out) breakdown[l.code] = round2((breakdown[l.code] ?? 0) + round2(l.hours));
-    return { calculated: out.length, excludedCadres, breakdown, method, period: { from, to }, ...(onlyCode ? { code: onlyCode } : {}) };
+    return {
+      calculated: out.length,
+      excludedCadres,
+      breakdown,
+      method,
+      period: { from, to },
+      unvalidatedWeeks: skippedWeeks.size,
+      ...(onlyCode ? { code: onlyCode } : {}),
+    };
   }
 
   // ── Lecture : rapport et export Sage ──────────────────────────────────────

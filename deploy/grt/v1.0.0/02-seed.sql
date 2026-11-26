@@ -310,7 +310,8 @@ INSERT INTO [dbo].[TimeSetting] ([Id], [Key], [Value], [Label]) VALUES
     (NEWID(), N'overtime_method', 1, N'Méthode de calcul des heures supplémentaires'),
     (NEWID(), N'deduct_break', 0, N'Retirer la pause du temps travaillé (1 = oui)'),
     (NEWID(), N'include_non_working_days', 1, N'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)'),
-    (NEWID(), N'panier_requires_continuous', 1, N'Panier seulement pour un service continu, sans pause (1 = oui)');
+    (NEWID(), N'panier_requires_continuous', 1, N'Panier seulement pour un service continu, sans pause (1 = oui)'),
+    (NEWID(), N'require_week_validation', 0, N'Payer seulement les semaines validées (1 = oui)');
 INSERT INTO [dbo].[TimePermanenceRate] ([Id], [DayType], [Amount]) VALUES
     (NEWID(), N'OUVRABLE', 5000),
     (NEWID(), N'SAMEDI', 8000),
