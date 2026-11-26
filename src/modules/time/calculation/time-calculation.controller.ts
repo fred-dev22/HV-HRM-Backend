@@ -6,7 +6,14 @@ import { RequirePermission } from '../../../common/decorators/require-permission
 import { CurrentPermissions } from '../../../common/decorators/current-permissions.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { TimeCalculationService } from './time-calculation.service';
-import { CalculateDailyHoursDto, CalculateOvertimeDto, PeriodDto, TimesheetListQueryDto, TimesheetQueryDto } from './time-calculation.dto';
+import {
+  CalculateDailyHoursDto,
+  CalculateOvertimeDto,
+  OvertimeAlertsQueryDto,
+  PeriodDto,
+  TimesheetListQueryDto,
+  TimesheetQueryDto,
+} from './time-calculation.dto';
 
 @RequireModule('time')
 @Controller('time')
@@ -59,6 +66,20 @@ export class TimeCalculationController {
     res.setHeader('Content-Disposition', `attachment; filename="export-sage-${q.From}-${q.To}.xlsx"`);
     await workbook.xlsx.write(res);
     res.end();
+  }
+
+  // Alerte heures supplementaires du tableau de bord : tous les employes pour le
+  // RH, sinon les membres de l'equipe du validateur.
+  @Get('overtime-alerts')
+  async overtimeAlerts(
+    @Query() q: OvertimeAlertsQueryDto,
+    @CurrentUser('employeeId') me: string,
+    @CurrentPermissions() permissions: Set<string>,
+  ) {
+    const admin = permissions.has('TEMPS_ACCES');
+    if (!admin && !permissions.has('TEMPS_VALIDER')) throw new ForbiddenException();
+    const ids = admin ? null : await this.service.teamEmployeeIds(me);
+    return this.service.overtimeAlerts(ids, q.Month);
   }
 
   // Feuille de temps : la sienne avec TEMPS_SAISIR, celle d'un membre de son

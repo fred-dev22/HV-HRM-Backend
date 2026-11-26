@@ -1,5 +1,5 @@
 -- GRT : script de migration unique (a jouer apres 01-schema.sql et 02-seed.sql, avant de demarrer
--- le nouveau backend). Il regroupe cinq evolutions, dans cet ordre :
+-- le nouveau backend). Il regroupe six evolutions, dans cet ordre :
 --   1) Messagerie : table MailSettings (configuration des emails dans l'application, Graph ou SMTP).
 --   2) Regime de conge annuel : Employee.LeaveRegime (Calendar | Working) et
 --      LeaveType.AppliesToLeaveRegime, pour les deux types de conge annuel (32 j calendaires,
@@ -7,8 +7,11 @@
 --   3) Interimaire du validateur direct : Employee.ValidatorInterimId.
 --   4) Temps de travail : heures supplementaires calculees a la semaine (reglage overtime_method).
 --   5) Stockage des fichiers : table StorageSettings et colonne Attachment.StorageProvider.
--- Chaque partie est transactionnelle et rejouable sans effet : le fichier peut etre relance sans risque.
--- Seule donnee modifiee : le reglage overtime_method. Aucun solde, employe ou type de conge n'est touche.
+--   6) Temps de travail : samedis et dimanches travailles comptes, plafond non imposable par
+--      employe, panier reserve au service continu.
+-- Chaque partie est transactionnelle et rejouable. Rejouer le fichier remet les reglages des parties
+-- 4 et 6 a leur valeur ci-dessous, meme s'ils ont ete changes depuis dans l'application.
+-- Seules donnees modifiees : des reglages du temps de travail. Aucun solde, employe ou type de conge n'est touche.
 GO
 -- Configuration de l'envoi d'emails depuis l'application (Microsoft Graph OU SMTP
 -- avec le nom de domaine du client), dans l'espace Parametres de l'application
@@ -209,6 +212,37 @@ END;
 
 COMMIT TRAN;
 PRINT N'Script (stockage des fichiers) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO
+
+
+-- ============================================================================
+-- Temps de travail : regles du client (mails des 23/07 et 04/08, reunion du 25/11).
+--  - include_non_working_days = 1 : un samedi ou un dimanche pointe compte.
+--  - monthly_ni_cap_company_wide = 0 : 20 h non imposables par employe.
+--  - panier_requires_continuous = 1 : panier seulement pour 8 h sans pause.
+-- Ces reglages se changent ensuite dans Temps de travail > Configuration > Reglages.
+-- Apres ce script, relancer les calculs T4 puis T5 des periodes non encore payees.
+-- ============================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+BEGIN TRY
+BEGIN TRAN;
+
+UPDATE dbo.TimeSetting SET [Value] = 1 WHERE [Key] = N'include_non_working_days';
+UPDATE dbo.TimeSetting SET [Value] = 0 WHERE [Key] = N'monthly_ni_cap_company_wide';
+IF NOT EXISTS (SELECT 1 FROM dbo.TimeSetting WHERE [Key] = N'panier_requires_continuous')
+    INSERT INTO dbo.TimeSetting ([Id], [Key], [Value], [Label])
+    VALUES (NEWID(), N'panier_requires_continuous', 1, N'Panier seulement pour un service continu, sans pause (1 = oui)');
+
+COMMIT TRAN;
+PRINT N'Script (regles du temps de travail) applique.';
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;

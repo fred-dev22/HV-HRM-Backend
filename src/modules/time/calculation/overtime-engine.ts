@@ -7,15 +7,15 @@
 //    semaine (lundi-dimanche) a 130 %, le reste a 150 %. Le samedi suit la
 //    repartition normale.
 //  - HS03 / HS04 : memes taux, reserves aux 20 premieres heures supplementaires
-//    du MOIS calendaire (non imposables), consommees du plus ancien au plus
-//    recent, apres la repartition hebdomadaire, sur HS01/HS02 uniquement.
+//    du MOIS calendaire de CHAQUE employe (non imposables), consommees du plus
+//    ancien au plus recent, apres la repartition hebdomadaire, sur HS01/HS02.
 //  - HS09 (nuit) et HS10 (dimanche/ferie) sont des MAJORATIONS : elles portent
 //    sur toutes les heures travaillees dans le creneau, pas seulement sur le
 //    depassement. Un dimanche/ferie est exclu du pool HS01-04. Les heures de
 //    nuit sont retirees du pool HS01-04 pour ne jamais valoriser deux fois la
 //    meme heure.
-//  - Panier : 1 par jour dont la duree travaillee atteint le seuil, plus les
-//    saisies manuelles validees, dedoublonnees par employe et par jour.
+//  - Panier : 1 par jour avec un service continu (sans pause) atteignant le
+//    seuil, plus les saisies manuelles validees, dedoublonnees par employe et jour.
 //  - Permanence : montant selon le type de jour, jamais derive du pointage.
 //
 // Jours : cles 'YYYY-MM-DD' ; jour de semaine et semaines calcules en UTC.
@@ -44,6 +44,8 @@ export interface TimeCalcSettings {
   monthlyNiCapHours: number;
   // 1 = plafond partage par toute l'entreprise (comme le systeme Pointage), 0 = propre a chaque employe.
   monthlyNiCapCompanyWide: boolean;
+  // Panier seulement pour un service continu (sans pause) d'au moins le seuil.
+  panierRequiresContinuous: boolean;
 }
 
 // Valeurs d'usine, identiques au seed (TIME_SETTINGS).
@@ -53,7 +55,8 @@ export const DEFAULT_TIME_SETTINGS: TimeCalcSettings = {
   nightEndHour: 5,
   weeklyHs01ThresholdHours: 8,
   monthlyNiCapHours: 20,
-  monthlyNiCapCompanyWide: true,
+  monthlyNiCapCompanyWide: false,
+  panierRequiresContinuous: true,
 };
 
 // Seuil hebdomadaire de la methode 'weekly' (code en dur dans le systeme
@@ -67,11 +70,47 @@ export interface DayHours {
   requiredHours: number;
 }
 
+export interface Interval {
+  start: Date;
+  end: Date;
+}
+
 export interface ClockRecord {
   employeeId: string;
   dateKey: string;
   firstClock: Date;
   lastClock: Date;
+  // Plages travaillees disjointes (pointeuse et saisies). Absent : une seule
+  // plage, du premier au dernier pointage.
+  intervals?: Interval[];
+  // Heures declarees sans horaires, ajoutees au temps travaille.
+  extraHours?: number;
+  // Le jour porte une saisie approuvee : compte meme hors des jours prevus.
+  declared?: boolean;
+  // Origine des plages, utile au panier : plage de la pointeuse et plages
+  // saisies. Les deux absents : tout vient de la pointeuse.
+  punch?: Interval;
+  declaredIntervals?: Interval[];
+}
+
+export const intervalsOf = (r: ClockRecord): Interval[] => r.intervals ?? [{ start: r.firstClock, end: r.lastClock }];
+
+const hoursBetween = (i: Interval): number => (i.end.getTime() - i.start.getTime()) / 3_600_000;
+
+// Plages triees ; celles qui se recouvrent ou se touchent sont reunies, pour
+// qu'une meme heure ne compte jamais deux fois.
+export function mergeIntervals(intervals: Interval[]): Interval[] {
+  const sorted = [...intervals].sort((a, b) => a.start.getTime() - b.start.getTime());
+  const result: Interval[] = [];
+  for (const current of sorted) {
+    const last = result[result.length - 1];
+    if (last && current.start.getTime() <= last.end.getTime()) {
+      if (current.end > last.end) last.end = current.end;
+    } else {
+      result.push({ start: current.start, end: current.end });
+    }
+  }
+  return result;
 }
 
 export interface OvertimeLine {
@@ -174,16 +213,20 @@ export function computeDailyHours(
   let skipped = 0;
   for (const r of records) {
     let required = holidays.has(r.dateKey) ? 0 : requiredFor(r.employeeId, r.dateKey);
-    if (required === null && options.includeNonWorkingDays) required = 0;
+    if (required === null && (options.includeNonWorkingDays || r.declared)) required = 0;
     if (required === null) {
       skipped++;
       continue;
     }
-    let worked = (r.lastClock.getTime() - r.firstClock.getTime()) / 3_600_000;
+    const intervals = intervalsOf(r);
+    let worked = intervals.reduce((sum, i) => sum + hoursBetween(i), 0);
     if (options.deductBreak && breakHoursFor) {
-      const pause = breakHoursFor(r.employeeId, r.dateKey);
+      // Un trou entre deux plages est deja une pause : on ne la retire pas deux fois.
+      const span = intervals.length ? hoursBetween({ start: r.firstClock, end: r.lastClock }) : 0;
+      const pause = Math.max(0, breakHoursFor(r.employeeId, r.dateKey) - Math.max(0, span - worked));
       if (worked > pause) worked -= pause;
     }
+    worked = Math.min(24, worked + (r.extraHours ?? 0));
     days.push({ employeeId: r.employeeId, dateKey: r.dateKey, workedHours: worked, requiredHours: required });
   }
   return { days, skipped };
@@ -211,12 +254,22 @@ export interface OvertimeInput {
   method: OvertimeMethod;
   from: string;
   to: string;
+  // Voir applyMonthlyNiCap (plafond par employe).
+  niAlreadyUsed?: Map<string, number>;
 }
 
 // Plafond mensuel non imposable : consomme du plus ancien au plus recent, par
 // mois calendaire, sur HS01/HS02 uniquement (converties en HS03/HS04). Une
 // ligne est scindee si le plafond tombe en son milieu. Modifie `lines`.
-export function applyMonthlyNiCap(lines: OvertimeLine[], monthlyCapHours: number, companyWide = false, rank?: Map<string, number>): void {
+// `alreadyUsed` : heures non imposables deja attribuees avant la periode calculee,
+// par mois (`AAAA-MM`) si le plafond est partage, sinon par `employe|AAAA-MM`.
+export function applyMonthlyNiCap(
+  lines: OvertimeLine[],
+  monthlyCapHours: number,
+  companyWide = false,
+  rank?: Map<string, number>,
+  alreadyUsed?: Map<string, number>,
+): void {
   const byMonth = new Map<string, OvertimeLine[]>();
   for (const line of lines) {
     if (line.category !== 'HS01' && line.category !== 'HS02') continue;
@@ -226,14 +279,14 @@ export function applyMonthlyNiCap(lines: OvertimeLine[], monthlyCapHours: number
     if (!byMonth.has(key)) byMonth.set(key, []);
     byMonth.get(key)!.push(line);
   }
-  for (const monthLines of byMonth.values()) {
+  for (const [capKey, monthLines] of byMonth) {
     monthLines.sort((a, b) =>
       a.dateKey !== b.dateKey
         ? a.dateKey < b.dateKey ? -1 : 1
         : (rank?.get(a.employeeId) ?? 0) - (rank?.get(b.employeeId) ?? 0) ||
           (a.employeeId < b.employeeId ? -1 : a.employeeId > b.employeeId ? 1 : 0),
     );
-    let remaining = monthlyCapHours;
+    let remaining = monthlyCapHours - (alreadyUsed?.get(capKey) ?? 0);
     for (const line of monthLines) {
       if (remaining <= 0) break;
       const convertible = Math.min(line.hours, remaining);
@@ -248,6 +301,46 @@ export function applyMonthlyNiCap(lines: OvertimeLine[], monthlyCapHours: number
       remaining -= convertible;
     }
   }
+}
+
+// Heures de nuit d'un jour, toutes plages confondues.
+function nightHoursOf(record: ClockRecord | undefined, dateKey: string, settings: TimeCalcSettings): number {
+  if (!record) return 0;
+  return intervalsOf(record).reduce(
+    (sum, i) => sum + nightOverlapHours(i.start, i.end, dateKey, settings.nightStartHour, settings.nightEndHour),
+    0,
+  );
+}
+
+const isSpecialDay = (dateKey: string, holidays: Set<string>) => holidays.has(dateKey) || dayOfWeek(dateKey) === 0;
+
+// Heures supplementaires jour par jour, au-dela de 40 h cumulees dans la semaine
+// (lundi-dimanche), pour la feuille de temps : meme base que le calcul de paie
+// (dimanches, jours feries et heures de nuit exclus). `days` doit commencer au
+// lundi de la premiere semaine affichee. Cle : `employe|AAAA-MM-JJ`.
+export function weeklyOvertimeByDay(
+  days: DayHours[],
+  clocks: ClockRecord[],
+  holidays: Set<string>,
+  settings: TimeCalcSettings,
+): Map<string, number> {
+  const clockByDay = clockIndex(clocks);
+  const result = new Map<string, number>();
+  for (const [employeeId, weeks] of groupByEmployeeWeek(days)) {
+    for (const weekDays of weeks.values()) {
+      weekDays.sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+      let pool = 0;
+      for (const dh of weekDays) {
+        if (isSpecialDay(dh.dateKey, holidays)) continue;
+        const key = `${employeeId}|${dh.dateKey}`;
+        const before = Math.max(0, pool - WEEKLY_PAID_HOURS);
+        pool += Math.max(0, dh.workedHours - nightHoursOf(clockByDay.get(key), dh.dateKey, settings));
+        const overtime = Math.max(0, pool - WEEKLY_PAID_HOURS) - before;
+        if (overtime > 0) result.set(key, overtime);
+      }
+    }
+  }
+  return result;
 }
 
 function groupByEmployeeWeek(days: DayHours[]): Map<string, Map<string, DayHours[]>> {
@@ -285,7 +378,7 @@ export function computeOvertimeLines(input: OvertimeInput): OvertimeLine[] {
       let weeklyPool = 0; // methode 'weekly'
 
       for (const dh of weekDays) {
-        const special = holidays.has(dh.dateKey) || dayOfWeek(dh.dateKey) === 0;
+        const special = isSpecialDay(dh.dateKey, holidays);
         const inPeriod = dh.dateKey >= from && dh.dateKey <= to;
 
         if (special) {
@@ -295,10 +388,7 @@ export function computeOvertimeLines(input: OvertimeInput): OvertimeLine[] {
           continue;
         }
 
-        const clock = clockByDay.get(`${employeeId}|${dh.dateKey}`);
-        const night = clock
-          ? nightOverlapHours(clock.firstClock, clock.lastClock, dh.dateKey, settings.nightStartHour, settings.nightEndHour)
-          : 0;
+        const night = nightHoursOf(clockByDay.get(`${employeeId}|${dh.dateKey}`), dh.dateKey, settings);
         if (night > 0 && inPeriod) {
           lines.push({ employeeId, dateKey: dh.dateKey, hours: night, category: 'HS09' });
         }
@@ -333,23 +423,47 @@ export function computeOvertimeLines(input: OvertimeInput): OvertimeLine[] {
   }
 
   // Plafond partage par l'entreprise : applique par l'appelant, une fois toutes les lignes de tous les employes connues.
-  if (!settings.monthlyNiCapCompanyWide) applyMonthlyNiCap(lines, settings.monthlyNiCapHours, false);
+  if (!settings.monthlyNiCapCompanyWide) {
+    applyMonthlyNiCap(lines, settings.monthlyNiCapHours, false, undefined, input.niAlreadyUsed);
+  }
   return lines;
 }
 
-// Paniers : un par employe et par jour, auto-calcule sur la duree travaillee
-// plus les saisies manuelles validees (jamais deux lignes le meme jour).
+// Plus longue duree travaillee sans interruption. Une saisie est continue telle
+// que declaree (une reprise apres une pause est une autre saisie). La pointeuse
+// ne donne que le premier et le dernier pointage : la pause de l'horaire est
+// consideree prise quand sa plage la couvre entierement. Un employe en service
+// continu doit donc avoir un horaire sans pause.
+export function longestContinuousHours(record: ClockRecord, breakWindow?: { start: string; end: string } | null): number {
+  const sourced = record.punch !== undefined || record.declaredIntervals !== undefined;
+  let punched = sourced ? (record.punch ? [record.punch] : []) : intervalsOf(record);
+  if (breakWindow) {
+    const start = new Date(`${record.dateKey}T${breakWindow.start}:00`);
+    const end = new Date(`${record.dateKey}T${breakWindow.end}:00`);
+    punched = punched.flatMap((i) =>
+      i.start <= start && i.end >= end ? [{ start: i.start, end: start }, { start: end, end: i.end }] : [i],
+    );
+  }
+  // Reunies apres coup : une saisie peut couvrir la pause et retablir la continuite.
+  return mergeIntervals([...punched, ...(record.declaredIntervals ?? [])]).reduce((max, i) => Math.max(max, hoursBetween(i)), 0);
+}
+
+// Paniers : un par employe et par jour, auto-calcule sur la duree travaillee (ou
+// sur la duree continue si `continuousHours` est fourni), plus les saisies
+// manuelles validees (jamais deux lignes le meme jour).
 export function computePanierDays(
   days: DayHours[],
   manualDays: PanierLine[],
   panierMinHours: number,
   from: string,
   to: string,
+  continuousHours?: (day: DayHours) => number,
 ): PanierLine[] {
   const result = new Map<string, PanierLine>();
   for (const dh of days) {
     if (dh.dateKey < from || dh.dateKey > to) continue;
-    if (dh.workedHours >= panierMinHours) {
+    // Une milliseconde de marge : 8 h pile ne doit pas dependre des flottants.
+    if ((continuousHours ? continuousHours(dh) : dh.workedHours) >= panierMinHours - 1e-6) {
       result.set(`${dh.employeeId}|${dh.dateKey}`, { employeeId: dh.employeeId, dateKey: dh.dateKey });
     }
   }

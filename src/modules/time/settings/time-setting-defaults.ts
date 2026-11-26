@@ -6,12 +6,18 @@ export const TIME_SETTINGS: { Key: string; Value: number; Label: string }[] = [
   { Key: 'night_window_end_hour', Value: 5, Label: 'Fin de la fenêtre de nuit' },
   { Key: 'weekly_hs01_threshold_hours', Value: 8, Label: 'Seuil hebdomadaire HS01/HS02' },
   { Key: 'monthly_ni_cap_hours', Value: 20, Label: 'Plafond mensuel non imposable HS03/HS04' },
-  // 1 = un seul plafond pour toute l'entreprise (comme le systeme Pointage), 0 = un plafond par employe.
-  { Key: 'monthly_ni_cap_company_wide', Value: 1, Label: "Plafond non imposable partagé par toute l'entreprise (1 = oui)" },
+  // Alerte au manager (tableau de bord) avant d'atteindre le plafond legal.
+  { Key: 'overtime_alert_hours', Value: 60, Label: "Alerte heures sup. : seuil mensuel (heures)" },
+  { Key: 'overtime_legal_cap_hours', Value: 80, Label: "Plafond légal mensuel d'heures supplémentaires" },
+  // 0 = un plafond par employe, 1 = un seul plafond pour toute l'entreprise (comme le systeme Pointage).
+  { Key: 'monthly_ni_cap_company_wide', Value: 0, Label: "Plafond non imposable partagé par toute l'entreprise (1 = oui)" },
   // Calcul a la semaine uniquement (au-dela de 40 h). Valeur informative : le moteur ne la lit plus.
   { Key: 'overtime_method', Value: 1, Label: 'Méthode de calcul des heures supplémentaires' },
-  // Corrections par rapport au systeme Pointage, desactivees tant que le client
-  // ne les a pas validees (elles changent les heures payees). 1 = active.
+  // Panier : service continu exige (retour client du 23/07).
+  { Key: 'panier_requires_continuous', Value: 1, Label: 'Panier seulement pour un service continu, sans pause (1 = oui)' },
+  // Corrections par rapport au systeme Pointage. 1 = active. La pause n'est pas
+  // retiree tant que le client ne l'a pas validee ; les samedis et dimanches
+  // travailles comptent (reunion du 25/11).
   { Key: 'deduct_break', Value: 0, Label: 'Retirer la pause du temps travaillé (1 = oui)' },
-  { Key: 'include_non_working_days', Value: 0, Label: 'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)' },
+  { Key: 'include_non_working_days', Value: 1, Label: 'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)' },
 ];

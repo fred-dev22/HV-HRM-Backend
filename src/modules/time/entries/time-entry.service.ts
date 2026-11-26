@@ -146,8 +146,20 @@ export class TimeEntryService {
       digest.approved.set(updated.EmployeeId, (digest.approved.get(updated.EmployeeId) ?? 0) + 1);
       return updated;
     }
+    await this.refreshDailyHours([updated.EmployeeId], keyOf(updated.Date), keyOf(updated.Date));
     await this.notify(updated.EmployeeId, 'Saisie de temps approuvée', `Votre saisie du ${keyOf(updated.Date)} est approuvée.`);
     return updated;
+  }
+
+  // Une saisie approuvee entre dans les heures travaillees : les heures du jour
+  // sont recalculees tout de suite. Un echec ne remet pas la decision en cause
+  // (le calcul T4 le rattrape).
+  private async refreshDailyHours(employeeIds: string[], from: string, to: string) {
+    try {
+      await this.calculation.calculateDailyHours(from, to, {}, employeeIds);
+    } catch (err) {
+      this.logger.warn(`Heures du jour non recalculées : ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async openStep(
@@ -409,6 +421,7 @@ export class TimeEntryService {
         failures.push({ ...item, message: err instanceof HttpException ? message : 'Erreur technique' });
       }
     }
+    if (digest.approved.size > 0) await this.refreshDailyHours([...digest.approved.keys()], from, to);
     await this.sendDigest(digest, from, to);
     return this.batchReport(employees, plan, false, created, failures);
   }
@@ -635,6 +648,7 @@ export class TimeEntryService {
       await this.notify(next.approverId, 'Saisie de temps à valider', `${existing.employee.FullName} : saisie du ${keyOf(existing.Date)}.`, '/hr/time/validation');
       await this.notifyCoApprovers(next.coApproverIds, next.approverId, 'Saisie de temps à valider', `${existing.employee.FullName} : saisie du ${keyOf(existing.Date)} (en tant qu'intérimaire).`);
     } else {
+      await this.refreshDailyHours([existing.EmployeeId], keyOf(existing.Date), keyOf(existing.Date));
       await this.notify(existing.EmployeeId, 'Saisie de temps approuvée', `Votre saisie du ${keyOf(existing.Date)} est approuvée.`);
     }
     return updated;

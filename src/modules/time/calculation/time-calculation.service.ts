@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CalendarService } from '../../calendar/calendar.service';
-import { OVERTIME_HOURS_ONLY, PANIER_CODE, PERMANENCE_CODE } from './pay-codes';
+import { TIME_SETTINGS } from '../settings/time-setting-defaults';
+import { OVERTIME_CODES, OVERTIME_ONLY, PANIER_CODE, PERMANENCE_CODE } from './pay-codes';
+import { WORK_ENTRY_TYPES, buildWorkRecords } from './work-records';
 import {
   DEFAULT_TIME_SETTINGS,
   OvertimeMethod,
@@ -13,7 +15,9 @@ import {
   computeOvertimeLines,
   computePanierDays,
   computePermanenceLines,
+  longestContinuousHours,
   mondayOf,
+  weeklyOvertimeByDay,
   requiredHoursOfSchedule,
   round2,
   applyMonthlyNiCap,
@@ -23,6 +27,13 @@ import {
 } from './overtime-engine';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
+
+// Horaire d'un calendrier, par jour de semaine (0 = dimanche).
+interface Schedule {
+  required: (number | null)[];
+  breakHours: number[];
+  breaks: ({ start: string; end: string } | null)[];
+}
 
 export interface DailyHoursResult {
   calculated: number;
@@ -72,6 +83,8 @@ function assertRange(from: string, to: string) {
 // vue sur un mois de pointage). Le calcul est fait avant la transaction ; elle ne fait qu'ecrire.
 const WRITE_TX_OPTIONS = { timeout: 300_000, maxWait: 30_000 };
 
+const DEFAULT_THRESHOLDS: Record<string, number> = Object.fromEntries(TIME_SETTINGS.map((s) => [s.Key, s.Value]));
+
 @Injectable()
 export class TimeCalculationService {
   private readonly logger = new Logger(TimeCalculationService.name);
@@ -94,6 +107,7 @@ export class TimeCalculationService {
       weeklyHs01ThresholdHours: byKey.get('weekly_hs01_threshold_hours') ?? d.weeklyHs01ThresholdHours,
       monthlyNiCapHours: byKey.get('monthly_ni_cap_hours') ?? d.monthlyNiCapHours,
       monthlyNiCapCompanyWide: (byKey.get('monthly_ni_cap_company_wide') ?? (d.monthlyNiCapCompanyWide ? 1 : 0)) === 1,
+      panierRequiresContinuous: (byKey.get('panier_requires_continuous') ?? (d.panierRequiresContinuous ? 1 : 0)) === 1,
     };
   }
 
@@ -200,7 +214,7 @@ export class TimeCalculationService {
   // son calendrier (employe > categorie > global). null = pas de calendrier.
   private async scheduleOf(
     employeeId: string,
-    cache: Map<string, { required: (number | null)[]; breakHours: number[] }>,
+    cache: Map<string, Schedule>,
   ) {
     let calendar;
     try {
@@ -212,6 +226,7 @@ export class TimeCalculationService {
     if (cached) return cached;
     const required: (number | null)[] = Array(7).fill(null);
     const breakHours: number[] = Array(7).fill(0);
+    const breaks: Schedule['breaks'] = Array(7).fill(null);
     for (const wd of calendar.workDays) {
       const idx = DAY_NAMES.indexOf(wd.DayOfWeek as (typeof DAY_NAMES)[number]);
       if (idx < 0) continue;
@@ -227,11 +242,48 @@ export class TimeCalculationService {
         const [bh, bm] = day.breakStart.split(':').map(Number);
         const [eh, em] = day.breakEnd.split(':').map(Number);
         breakHours[idx] = (eh! * 60 + em! - (bh! * 60 + bm!)) / 60;
+        if (day.isWorkingDay) breaks[idx] = { start: day.breakStart, end: day.breakEnd };
       }
     }
-    const value = { required, breakHours };
+    const value = { required, breakHours, breaks };
     cache.set(calendar.Id, value);
     return value;
+  }
+
+  // Temps travaille de la periode, par `employe|jour` : pointeuse et saisies de
+  // travail approuvees.
+  private async loadWorkRecords(from: string, to: string, employeeIds?: string[]): Promise<Map<string, ClockRecord>> {
+    const range = { gte: toDate(from), lte: toDate(to) };
+    const [punches, declared] = await Promise.all([
+      this.prisma.timeMorphoRecord.findMany({
+        where: { EmployeeId: employeeIds ? { in: employeeIds } : { not: null }, DateJour: range },
+        select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
+      }),
+      this.prisma.timeManualEntry.findMany({
+        where: {
+          Status: 'Approved',
+          EntryType: { in: WORK_ENTRY_TYPES },
+          Date: range,
+          ...(employeeIds ? { EmployeeId: { in: employeeIds } } : {}),
+        },
+        select: { EmployeeId: true, Date: true, Hours: true, FirstClockIn: true, LastClockOut: true },
+      }),
+    ]);
+    return buildWorkRecords(
+      punches.map((p) => ({
+        employeeId: p.EmployeeId!,
+        dateKey: dateKey(p.DateJour),
+        firstClock: p.PremierPointage,
+        lastClock: p.DernierPointage,
+      })),
+      declared.map((d) => ({
+        employeeId: d.EmployeeId,
+        dateKey: dateKey(d.Date),
+        start: d.FirstClockIn,
+        end: d.LastClockOut,
+        hours: Number(d.Hours),
+      })),
+    );
   }
 
   // ── T4 : heures du jour ───────────────────────────────────────────────────
@@ -240,7 +292,8 @@ export class TimeCalculationService {
   // explicite de l'appel les remplace.
   private async loadCorrections(override: { deductBreak?: boolean; includeNonWorkingDays?: boolean }) {
     const rows = await this.prisma.timeSetting.findMany({ where: { Key: { in: ['deduct_break', 'include_non_working_days'] } } });
-    const flag = (key: string) => Number(rows.find((r) => r.Key === key)?.Value ?? 0) === 1;
+    const flag = (key: string) =>
+      Number(rows.find((r) => r.Key === key)?.Value ?? TIME_SETTINGS.find((d) => d.Key === key)?.Value ?? 0) === 1;
     return {
       deductBreak: override.deductBreak ?? flag('deduct_break'),
       includeNonWorkingDays: override.includeNonWorkingDays ?? flag('include_non_working_days'),
@@ -251,37 +304,17 @@ export class TimeCalculationService {
     from: string,
     to: string,
     override: { deductBreak?: boolean; includeNonWorkingDays?: boolean } = {},
+    // Limite le recalcul a ces employes (saisie approuvee) ; absent : tout le monde.
+    employeeIds?: string[],
   ): Promise<DailyHoursResult> {
     assertRange(from, to);
     const { deductBreak, includeNonWorkingDays } = await this.loadCorrections(override);
-    const records = await this.prisma.timeMorphoRecord.findMany({
-      where: { EmployeeId: { not: null }, DateJour: { gte: toDate(from), lte: toDate(to) } },
-      select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
-    });
-
-    // Plusieurs lignes le meme jour (fichiers qui se recouvrent) : on garde le
-    // premier pointage le plus tot et le dernier le plus tard.
-    const merged = new Map<string, ClockRecord>();
-    for (const r of records) {
-      const key = `${r.EmployeeId}|${dateKey(r.DateJour)}`;
-      const existing = merged.get(key);
-      if (!existing) {
-        merged.set(key, {
-          employeeId: r.EmployeeId!,
-          dateKey: dateKey(r.DateJour),
-          firstClock: r.PremierPointage,
-          lastClock: r.DernierPointage,
-        });
-      } else {
-        if (r.PremierPointage < existing.firstClock) existing.firstClock = r.PremierPointage;
-        if (r.DernierPointage > existing.lastClock) existing.lastClock = r.DernierPointage;
-      }
-    }
+    const merged = await this.loadWorkRecords(from, to, employeeIds);
 
     const employees = await this.loadEmployees(Array.from(new Set(Array.from(merged.values()).map((m) => m.employeeId))));
     const holidayRows = await this.loadHolidayRows(from, to);
     const ancestors = await this.loadOrganizationAncestors();
-    const scheduleCache = new Map<string, { required: (number | null)[]; breakHours: number[] }>();
+    const scheduleCache = new Map<string, Schedule>();
 
     const days: DayHours[] = [];
     let skipped = 0;
@@ -318,7 +351,9 @@ export class TimeCalculationService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.timeDailyHours.deleteMany({ where: { Date: { gte: toDate(from), lte: toDate(to) } } });
+      await tx.timeDailyHours.deleteMany({
+        where: { Date: { gte: toDate(from), lte: toDate(to) }, ...(employeeIds ? { EmployeeId: { in: employeeIds } } : {}) },
+      });
       for (let i = 0; i < days.length; i += 500) {
         await tx.timeDailyHours.createMany({
           data: days.slice(i, i + 500).map((d) => ({
@@ -379,10 +414,7 @@ export class TimeCalculationService {
     const dailyRows = await this.prisma.timeDailyHours.findMany({
       where: { Date: { gte: toDate(widenedFrom), lte: toDate(to) } },
     });
-    const clockRows = await this.prisma.timeMorphoRecord.findMany({
-      where: { EmployeeId: { not: null }, DateJour: { gte: toDate(widenedFrom), lte: toDate(to) } },
-      select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
-    });
+    const merged = await this.loadWorkRecords(widenedFrom, to);
 
     const employees = await this.loadEmployees(Array.from(new Set(dailyRows.map((d) => d.EmployeeId))));
     const holidayRows = await this.loadHolidayRows(widenedFrom, to);
@@ -397,18 +429,23 @@ export class TimeCalculationService {
       select: { EmployeeId: true, Date: true, EntryType: true },
     });
 
-    const merged = new Map<string, ClockRecord>();
-    for (const r of clockRows) {
-      const key = `${r.EmployeeId}|${dateKey(r.DateJour)}`;
-      const e = merged.get(key);
-      if (!e) {
-        merged.set(key, { employeeId: r.EmployeeId!, dateKey: dateKey(r.DateJour), firstClock: r.PremierPointage, lastClock: r.DernierPointage });
-      } else {
-        if (r.PremierPointage < e.firstClock) e.firstClock = r.PremierPointage;
-        if (r.DernierPointage > e.lastClock) e.lastClock = r.DernierPointage;
-      }
+    // Heures non imposables deja attribuees dans le mois avant la periode : un
+    // calcul semaine par semaine ne doit pas redonner un plafond a chaque fois.
+    const monthStart = `${from.slice(0, 7)}-01`;
+    const priorNi =
+      from > monthStart
+        ? await this.prisma.timeOvertime.findMany({
+            where: { Date: { gte: toDate(monthStart), lt: toDate(from) }, code: { Code: { in: ['HS03', 'HS04'] } } },
+            select: { EmployeeId: true, Hours: true },
+          })
+        : [];
+    const niAlreadyUsed = new Map<string, number>();
+    for (const line of priorNi) {
+      const key = settings.monthlyNiCapCompanyWide ? from.slice(0, 7) : `${line.EmployeeId}|${from.slice(0, 7)}`;
+      niAlreadyUsed.set(key, (niAlreadyUsed.get(key) ?? 0) + Number(line.Hours));
     }
 
+    const scheduleCache = new Map<string, Schedule>();
     const rates = await this.loadPermanenceRates();
     const out: { employeeId: string; dateKey: string; code: string; hours: number }[] = [];
     let excludedCadres = 0;
@@ -435,7 +472,7 @@ export class TimeCalculationService {
         }));
       const clocks = Array.from(merged.values()).filter((c) => c.employeeId === employeeId);
 
-      for (const l of computeOvertimeLines({ days, clocks, holidays, settings, method, from, to })) {
+      for (const l of computeOvertimeLines({ days, clocks, holidays, settings, method, from, to, niAlreadyUsed })) {
         out.push({ employeeId, dateKey: l.dateKey, code: l.category, hours: l.hours });
       }
 
@@ -443,7 +480,17 @@ export class TimeCalculationService {
       const manualPanier = mine
         .filter((a) => a.EntryType === 'panier')
         .map((a) => ({ employeeId, dateKey: dateKey(a.Date) }));
-      for (const p of computePanierDays(days, manualPanier, settings.panierMinHours, from, to)) {
+      const schedule = settings.panierRequiresContinuous ? await this.scheduleOf(employeeId, scheduleCache) : null;
+      const continuousHours = settings.panierRequiresContinuous
+        ? (day: DayHours) => {
+            const record = merged.get(`${employeeId}|${day.dateKey}`);
+            if (!record) return 0;
+            // Jour ferie : l'horaire ne s'applique pas, aucune pause n'est supposee.
+            const breakWindow = holidays.has(day.dateKey) ? null : schedule?.breaks[toDate(day.dateKey).getUTCDay()];
+            return longestContinuousHours(record, breakWindow);
+          }
+        : undefined;
+      for (const p of computePanierDays(days, manualPanier, settings.panierMinHours, from, to, continuousHours)) {
         out.push({ employeeId, dateKey: p.dateKey, code: PANIER_CODE, hours: 1 });
       }
       const permanence = mine
@@ -461,7 +508,7 @@ export class TimeCalculationService {
         .map((o) => ({ employeeId: o.employeeId, dateKey: o.dateKey, hours: o.hours, category: o.code as OvertimeCategory }));
       // Meme jour : l'employe cree le premier est servi le premier (comme l'ordre d'id de Pointage).
       const rank = new Map(Array.from(employees.values()).map((e) => [e.id, e.createdAt]));
-      applyMonthlyNiCap(hs, settings.monthlyNiCapHours, true, rank);
+      applyMonthlyNiCap(hs, settings.monthlyNiCapHours, true, rank, niAlreadyUsed);
       const rest = out.filter((o) => o.code !== 'HS01' && o.code !== 'HS02');
       out.length = 0;
       out.push(...rest, ...hs.map((l) => ({ employeeId: l.employeeId, dateKey: l.dateKey, code: l.category as string, hours: l.hours })));
@@ -553,6 +600,64 @@ export class TimeCalculationService {
     }
   }
 
+  // Employes ayant atteint le seuil d'alerte d'heures supplementaires sur un mois,
+  // d'apres le dernier calcul T5 (les semaines sont rattachees au mois de leur
+  // dimanche, comme en paie). employeeIds : null = toute l'entreprise (RH).
+  async overtimeAlerts(employeeIds: string[] | null, month?: string) {
+    const now = new Date();
+    const key = month ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const start = toDate(`${key}-01`);
+    const range = { gte: start, lt: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1)) };
+
+    const keys = ['overtime_alert_hours', 'overtime_legal_cap_hours'];
+    const rows = await this.prisma.timeSetting.findMany({ where: { Key: { in: keys } } });
+    // Reglage pas encore cree sur une base existante : valeur d'usine.
+    const [alertHours, legalHours] = keys.map((k) =>
+      Number(rows.find((r) => r.Key === k)?.Value ?? DEFAULT_THRESHOLDS[k]),
+    );
+
+    const [totals, latest] = await Promise.all([
+      this.prisma.timeOvertime.groupBy({
+        by: ['EmployeeId'],
+        where: {
+          Date: range,
+          code: { Code: { in: OVERTIME_CODES } },
+          employee: { IsCadre: false, IsDeleted: false, IsSystem: false },
+          ...(employeeIds ? { EmployeeId: { in: employeeIds } } : {}),
+        },
+        _sum: { Hours: true },
+      }),
+      // Toute ligne calculee compte : un mois calcule sans depassement n'est pas un mois non calcule.
+      this.prisma.timeOvertime.aggregate({ where: { Date: range }, _max: { Date: true } }),
+    ]);
+    const reached = totals
+      .map((t) => ({ id: t.EmployeeId, hours: round2(Number(t._sum.Hours ?? 0)) }))
+      .filter((t) => t.hours >= alertHours!);
+    const employees = reached.length
+      ? await this.prisma.employee.findMany({
+          where: { Id: { in: reached.map((r) => r.id) } },
+          select: { Id: true, FullName: true, EmployeeNumber: true },
+        })
+      : [];
+    const byId = new Map(employees.map((e) => [e.Id, e]));
+    return {
+      Month: key,
+      AlertHours: alertHours!,
+      LegalHours: legalHours!,
+      // Date de la derniere ligne calculee du mois, null si rien n'est calcule.
+      LastCalculatedDate: latest._max.Date ? dateKey(latest._max.Date) : null,
+      Employees: reached
+        .sort((a, b) => b.hours - a.hours)
+        .map((r) => ({
+          EmployeeId: r.id,
+          FullName: byId.get(r.id)?.FullName ?? '',
+          EmployeeNumber: byId.get(r.id)?.EmployeeNumber ?? '',
+          Hours: r.hours,
+          LegalCapReached: r.hours >= legalHours!,
+        })),
+    };
+  }
+
   // Feuille de temps d'un employe : une ligne par jour de la periode.
   // Employes de l'equipe d'un validateur : ceux dont il est le validateur direct
   // et ceux des entites qu'il dirige.
@@ -578,7 +683,7 @@ export class TimeCalculationService {
     const employees = await this.loadEmployees(employeeIds);
     const holidayRows = await this.loadHolidayRows(from, to);
     const ancestors = await this.loadOrganizationAncestors();
-    const cache = new Map<string, { required: (number | null)[]; breakHours: number[] }>();
+    const cache = new Map<string, Schedule>();
     const keys: string[] = [];
     for (let k = from; k <= to; k = dateKey(new Date(toDate(k).getTime() + 86_400_000))) keys.push(k);
     for (const id of employeeIds) {
@@ -589,6 +694,48 @@ export class TimeCalculationService {
       for (const k of keys) {
         const required = holidays.has(k) ? 0 : (schedule?.required[toDate(k).getUTCDay()] ?? 0);
         result.set(`${id}|${k}`, required);
+      }
+    }
+    return result;
+  }
+
+  // Heures supplementaires affichees sur les feuilles de temps : au-dela de 40 h
+  // cumulees dans la semaine, comme la paie. Les cadres n'en ont pas.
+  private async weeklyOvertime(employeeIds: string[], from: string, to: string): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (employeeIds.length === 0) return result;
+    const monday = mondayOf(from);
+    const wanted = new Set(employeeIds);
+    // Un seul employe : lecture ciblee. Sinon toute la periode (bornee par l'effectif).
+    const only = employeeIds.length === 1 ? employeeIds : undefined;
+    const [rows, records, settings, employees, holidayRows, ancestors] = await Promise.all([
+      this.prisma.timeDailyHours.findMany({
+        where: { Date: { gte: toDate(monday), lte: toDate(to) }, ...(only ? { EmployeeId: { in: only } } : {}) },
+        select: { EmployeeId: true, Date: true, WorkedHours: true },
+      }),
+      this.loadWorkRecords(monday, to, only),
+      this.loadSettings(),
+      this.loadEmployees(employeeIds),
+      this.loadHolidayRows(monday, to),
+      this.loadOrganizationAncestors(),
+    ]);
+    const days = new Map<string, DayHours[]>();
+    for (const r of rows) {
+      if (!wanted.has(r.EmployeeId)) continue;
+      if (!days.has(r.EmployeeId)) days.set(r.EmployeeId, []);
+      days.get(r.EmployeeId)!.push({ employeeId: r.EmployeeId, dateKey: dateKey(r.Date), workedHours: Number(r.WorkedHours), requiredHours: 0 });
+    }
+    const clocks = new Map<string, ClockRecord[]>();
+    for (const c of records.values()) {
+      if (!clocks.has(c.employeeId)) clocks.set(c.employeeId, []);
+      clocks.get(c.employeeId)!.push(c);
+    }
+    for (const [id, list] of days) {
+      const employee = employees.get(id);
+      if (!employee || employee.isCadre) continue;
+      const holidays = this.holidaysFor(employee, holidayRows, ancestors);
+      for (const [key, hours] of weeklyOvertimeByDay(list, clocks.get(id) ?? [], holidays, settings)) {
+        result.set(key, hours);
       }
     }
     return result;
@@ -624,7 +771,7 @@ export class TimeCalculationService {
         select: { EmployeeId: true, Date: true, WorkedHours: true },
       }),
       this.prisma.timeOvertime.findMany({
-        where: { Date: { gte: toDate(from), lte: toDate(to) }, ...OVERTIME_HOURS_ONLY },
+        where: { Date: { gte: toDate(from), lte: toDate(to) }, ...OVERTIME_ONLY },
         select: { EmployeeId: true, Hours: true },
       }),
     ]);
@@ -635,6 +782,7 @@ export class TimeCalculationService {
       return r;
     };
     const requiredMap = await this.requiredPerDay(employees.map((e) => e.Id), from, to);
+    const overtimeMap = await this.weeklyOvertime(employees.map((e) => e.Id), from, to);
     const workedMap = new Map<string, number>();
     for (const d of days) {
       if (wanted.has(d.EmployeeId)) workedMap.set(`${d.EmployeeId}|${dateKey(d.Date)}`, Number(d.WorkedHours));
@@ -646,7 +794,7 @@ export class TimeCalculationService {
         const worked = workedMap.get(`${e.Id}|${k}`) ?? 0;
         r.required += required;
         r.worked += worked;
-        r.overtime += Math.max(0, worked - required);
+        r.overtime += overtimeMap.get(`${e.Id}|${k}`) ?? 0;
         r.absence += Math.max(0, required - worked);
       }
     }
@@ -689,24 +837,12 @@ export class TimeCalculationService {
     if (!found) throw new BadRequestException('Employé introuvable');
     // Service = entite de rattachement (affiche sur la feuille de temps en PDF).
     const employee = { Id: found.Id, FullName: found.FullName, EmployeeNumber: found.EmployeeNumber, Service: found.organizationUnit?.Name ?? null };
-    const [days, clocks] = await Promise.all([
+    const [days, records, overtimeMap] = await Promise.all([
       this.prisma.timeDailyHours.findMany({ where: { EmployeeId: employeeId, Date: { gte: toDate(from), lte: toDate(to) } } }),
-      this.prisma.timeMorphoRecord.findMany({
-        where: { EmployeeId: employeeId, DateJour: { gte: toDate(from), lte: toDate(to) } },
-        orderBy: { PremierPointage: 'asc' },
-      }),
+      this.loadWorkRecords(from, to, [employeeId]),
+      this.weeklyOvertime([employeeId], from, to),
     ]);
     const dayByKey = new Map(days.map((d) => [dateKey(d.Date), d]));
-    const clockByKey = new Map<string, { in: Date; out: Date }>();
-    for (const c of clocks) {
-      const k = dateKey(c.DateJour);
-      const e = clockByKey.get(k);
-      if (!e) clockByKey.set(k, { in: c.PremierPointage, out: c.DernierPointage });
-      else {
-        if (c.PremierPointage < e.in) e.in = c.PremierPointage;
-        if (c.DernierPointage > e.out) e.out = c.DernierPointage;
-      }
-    }
     const requiredMap = await this.requiredPerDay([employeeId], from, to);
     const raw: { required: number; worked: number; overtime: number; absence: number }[] = [];
     const rows: { date: string; required: number; worked: number; overtime: number; absence: number; in: string | null; out: string | null }[] = [];
@@ -715,16 +851,19 @@ export class TimeCalculationService {
       const d = dayByKey.get(cursor);
       const required = requiredMap.get(`${employeeId}|${cursor}`) ?? 0;
       const worked = d ? Number(d.WorkedHours) : 0;
-      const c = clockByKey.get(cursor);
-      raw.push({ required, worked, overtime: Math.max(0, worked - required), absence: Math.max(0, required - worked) });
+      const record = records.get(`${employeeId}|${cursor}`);
+      // Une saisie en duree seule n'a pas d'heure d'entree ni de sortie.
+      const c = record && record.intervals?.length ? record : null;
+      const overtime = overtimeMap.get(`${employeeId}|${cursor}`) ?? 0;
+      raw.push({ required, worked, overtime, absence: Math.max(0, required - worked) });
       rows.push({
         date: cursor,
         required: round2(required),
         worked: round2(worked),
-        overtime: round2(Math.max(0, worked - required)),
+        overtime: round2(overtime),
         absence: round2(Math.max(0, required - worked)),
-        in: c ? c.in.toISOString() : null,
-        out: c ? c.out.toISOString() : null,
+        in: c ? c.firstClock.toISOString() : null,
+        out: c ? c.lastClock.toISOString() : null,
       });
       cursor = dateKey(new Date(toDate(cursor).getTime() + 86_400_000));
     }

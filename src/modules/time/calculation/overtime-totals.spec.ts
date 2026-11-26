@@ -1,11 +1,11 @@
 import { DashboardService } from '../../dashboard/dashboard.service';
-import { OVERTIME_HOURS_ONLY } from './pay-codes';
+import { OVERTIME_ONLY } from './pay-codes';
 
-// Un panier est un nombre et une permanence un montant : ils ne doivent pas
-// entrer dans les totaux d'heures supplementaires (tableau de bord : 69 001 h).
+// Un panier est un nombre, une permanence un montant, HS09 et HS10 des
+// majorations : rien de cela n'entre dans un total d'heures supplementaires.
 describe("totaux d'heures supplementaires", () => {
-  it('le filtre ecarte le panier et la permanence', () => {
-    expect(OVERTIME_HOURS_ONLY.code.Code.notIn).toEqual(['30900', '2210']);
+  it('le filtre ne retient que HS01 a HS04', () => {
+    expect(OVERTIME_ONLY.code.Code.in).toEqual(['HS01', 'HS02', 'HS03', 'HS04']);
   });
 
   it('le tableau de bord ne somme que les lignes en heures', async () => {
@@ -24,6 +24,6 @@ describe("totaux d'heures supplementaires", () => {
     service.prisma = prisma;
     const r = await service.timeCounts(new Date('2026-11-01'), new Date('2026-12-01'), new Date('2026-11-25'));
     expect(r.overtimeHoursMonth).toBe(10);
-    expect(aggregate.mock.calls[0][0].where.code).toEqual(OVERTIME_HOURS_ONLY.code);
+    expect(aggregate.mock.calls[0][0].where.code).toEqual(OVERTIME_ONLY.code);
   });
 });

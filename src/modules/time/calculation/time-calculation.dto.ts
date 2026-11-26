@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min } from 'class-validator';
 
 export class PeriodDto {
   @IsDateString()
@@ -37,6 +37,13 @@ export class TimesheetQueryDto extends PeriodDto {
   @IsOptional()
   @IsUUID()
   EmployeeId?: string;
+}
+
+export class OvertimeAlertsQueryDto {
+  // Mois au format AAAA-MM ; mois en cours par defaut.
+  @IsOptional()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'Mois au format AAAA-MM' })
+  Month?: string;
 }
 
 // Feuilles de temps de plusieurs employes (globale ou equipe) : recherche et
