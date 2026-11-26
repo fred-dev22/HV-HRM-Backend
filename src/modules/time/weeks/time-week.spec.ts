@@ -93,7 +93,7 @@ describe('semaine validee ou controlee', () => {
   });
 
   it('un manager ne voit pas la semaine d un employe hors equipe', async () => {
-    const service = new TimeWeekService({} as never, { teamEmployeeIds: jest.fn().mockResolvedValue(['equipier']) } as never);
+    const service = new TimeWeekService({} as never, { teamEmployeeIds: jest.fn().mockResolvedValue(['equipier']) } as never, {} as never);
     await expect(service.week('autre', DAY, 'chef', new Set(['TEMPS_VALIDER']))).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

@@ -78,7 +78,7 @@ export class TimeCalculationController {
   ) {
     const admin = permissions.has('TEMPS_ACCES');
     if (!admin && !permissions.has('TEMPS_VALIDER')) throw new ForbiddenException();
-    const ids = admin ? null : await this.service.teamEmployeeIds(me);
+    const ids = admin ? null : await this.service.alertTeamIds(me);
     return this.service.overtimeAlerts(ids, q.Month);
   }
 

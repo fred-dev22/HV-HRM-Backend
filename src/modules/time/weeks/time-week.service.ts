@@ -25,6 +25,7 @@ import {
   sortPunches,
 } from '../calculation/day-punches';
 import { WORK_ENTRY_TYPES } from '../calculation/work-records';
+import { OvertimeAlertService } from '../alerts/overtime-alert.service';
 import { frShort, removeControl } from './week-lock';
 import type { SaveWeekDto, WeekDayDto, WeekListQueryDto } from './time-week.dto';
 
@@ -121,6 +122,7 @@ export class TimeWeekService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly calculation: TimeCalculationService,
+    private readonly alerts: OvertimeAlertService,
   ) {}
 
   // ── Calcul des semaines ──────────────────────────────────────────────────
@@ -508,6 +510,7 @@ export class TimeWeekService {
     if (blockers.length) throw new BadRequestException(blockers.join(' ; '));
     const data = { Status: 'Controlled', ControlledById: me, ControlledAt: new Date() };
     await this.setStatus(employeeId, monday, data, 'CONTROL', me);
+    await this.alerts.notifyIfReached(employeeId, monday, me);
     return this.week(employeeId, monday, me, permissions);
   }
 
@@ -529,6 +532,8 @@ export class TimeWeekService {
     const data = { Status: 'Validated', ValidatedById: me, ValidatedAt: new Date(), Snapshot: JSON.stringify(snapshot) };
     await this.setStatus(employeeId, monday, data, 'VALIDATE', me, week.status === 'Open' ? 'Validée sans contrôle préalable' : undefined);
     await this.refreshDailyHours(employeeId, monday);
+    // Si elle n'est pas partie au controle (validation directe, seuil atteint depuis).
+    await this.alerts.notifyIfReached(employeeId, monday, me);
     return this.week(employeeId, monday, me, permissions);
   }
 

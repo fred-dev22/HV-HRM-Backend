@@ -6,9 +6,9 @@ export const TIME_SETTINGS: { Key: string; Value: number; Label: string }[] = [
   { Key: 'night_window_end_hour', Value: 5, Label: 'Fin de la fenêtre de nuit' },
   { Key: 'weekly_hs01_threshold_hours', Value: 8, Label: 'Seuil hebdomadaire HS01/HS02' },
   { Key: 'monthly_ni_cap_hours', Value: 20, Label: 'Plafond mensuel non imposable HS03/HS04' },
-  // Alerte au manager (tableau de bord) avant d'atteindre le plafond legal.
-  { Key: 'overtime_alert_hours', Value: 60, Label: "Alerte heures sup. : seuil mensuel (heures)" },
-  { Key: 'overtime_legal_cap_hours', Value: 80, Label: "Plafond légal mensuel d'heures supplémentaires" },
+  // Alerte au manager et a la RH (controle ou validation d'une semaine, tableau de bord).
+  { Key: 'overtime_alert_hours', Value: 20, Label: "Alerte heures sup. : seuil mensuel (heures)" },
+  { Key: 'overtime_legal_cap_hours', Value: 20, Label: "Plafond légal mensuel d'heures supplémentaires" },
   // 0 = un plafond par employe, 1 = un seul plafond pour toute l'entreprise (comme le systeme Pointage).
   { Key: 'monthly_ni_cap_company_wide', Value: 0, Label: "Plafond non imposable partagé par toute l'entreprise (1 = oui)" },
   // Validation hebdomadaire : 1 = seules les semaines validees par le RH partent en paie.

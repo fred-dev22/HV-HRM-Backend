@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { CalendarService } from '../../calendar/calendar.service';
 import { TIME_SETTINGS } from '../settings/time-setting-defaults';
-import { OVERTIME_CODES, OVERTIME_ONLY, PANIER_CODE, PERMANENCE_CODE } from './pay-codes';
+import { OVERTIME_ONLY, PANIER_CODE, PERMANENCE_CODE } from './pay-codes';
 import { WORK_ENTRY_TYPES, buildWorkRecords } from './work-records';
 import { DayPunch, FrozenDay, parseJson, recordFromPunches } from './day-punches';
 import { weekKey } from '../weeks/week-lock';
@@ -19,6 +19,7 @@ import {
   computePermanenceLines,
   deductTravel,
   longestContinuousHours,
+  addDays,
   mondayOf,
   weeklyOvertimeByDay,
   requiredHoursOfSchedule,
@@ -721,39 +722,90 @@ export class TimeCalculationService {
     }
   }
 
-  // Employes ayant atteint le seuil d'alerte d'heures supplementaires sur un mois,
-  // d'apres le dernier calcul T5 (les semaines sont rattachees au mois de leur
-  // dimanche, comme en paie). employeeIds : null = toute l'entreprise (RH).
+  // Seuils mensuels d'heures supplementaires ; reglage absent : valeur d'usine.
+  async overtimeThresholds(): Promise<{ alertHours: number; legalHours: number }> {
+    const keys = ['overtime_alert_hours', 'overtime_legal_cap_hours'];
+    const rows = await this.prisma.timeSetting.findMany({ where: { Key: { in: keys } } });
+    const [alertHours, legalHours] = keys.map((k) => Number(rows.find((r) => r.Key === k)?.Value ?? DEFAULT_THRESHOLDS[k]));
+    return { alertHours: alertHours!, legalHours: legalHours! };
+  }
+
+  // Heures supplementaires du mois par employe, d'apres les heures du jour (a
+  // jour des imports, saisies approuvees et corrections), sans attendre la paie.
+  // Comme en paie, une semaine appartient au mois de son dimanche.
+  async monthlyOvertime(employeeIds: string[], month: string): Promise<Map<string, number>> {
+    const [year, number] = month.split('-').map(Number);
+    const first = `${month}-01`;
+    const last = dateKey(new Date(Date.UTC(year!, number!, 0)));
+    const firstSunday = addDays(first, (7 - toDate(first).getUTCDay()) % 7);
+    const lastSunday = addDays(last, -toDate(last).getUTCDay());
+    const byDay = await this.weeklyOvertime(employeeIds, addDays(firstSunday, -6), lastSunday);
+    const totals = new Map<string, number>();
+    for (const [key, hours] of byDay) {
+      const id = key.slice(0, key.indexOf('|'));
+      totals.set(id, (totals.get(id) ?? 0) + hours);
+    }
+    return totals;
+  }
+
+  // Equipe suivie par les alertes : celle du manager, ceux dont il est
+  // l'interimaire du validateur direct, et ceux que couvre un pool de validation
+  // des temps dont il est membre ou interimaire.
+  async alertTeamIds(me: string): Promise<string[]> {
+    const ids = new Set(await this.teamEmployeeIds(me));
+    const [interimOf, pools] = await Promise.all([
+      this.prisma.employee.findMany({
+        where: { IsDeleted: false, IsSystem: false, directValidator: { ValidatorInterimId: me } },
+        select: { Id: true },
+      }),
+      this.prisma.approvalPool.findMany({
+        where: { ObjectType: 'TimeEntry', IsActive: true },
+        select: { OrganizationUnitId: true, members: { select: { EmployeeId: true, InterimEmployeeId: true } } },
+      }),
+    ]);
+    interimOf.forEach((e) => ids.add(e.Id));
+    const poolByUnit = new Map(pools.map((p) => [p.OrganizationUnitId, p]));
+    if (pools.some((p) => p.members.some((m) => m.EmployeeId === me || m.InterimEmployeeId === me))) {
+      const [others, ancestors] = await Promise.all([
+        this.prisma.employee.findMany({
+          where: { IsDeleted: false, IsSystem: false, DirectValidatorId: null },
+          select: { Id: true, OrganizationUnitId: true },
+        }),
+        this.loadOrganizationAncestors(),
+      ]);
+      for (const e of others) {
+        // La chaine part de l'entite de l'employe : le premier pool rencontre s'applique.
+        const unit = [...(ancestors.get(e.OrganizationUnitId) ?? [])].find((u) => poolByUnit.has(u));
+        const members = unit ? poolByUnit.get(unit)!.members : [];
+        if (members.some((m) => m.EmployeeId === me || m.InterimEmployeeId === me)) ids.add(e.Id);
+      }
+    }
+    ids.delete(me);
+    return [...ids];
+  }
+
+  // Employes dont les heures supplementaires du mois atteignent le seuil
+  // d'alerte. employeeIds : null = toute l'entreprise (RH).
   async overtimeAlerts(employeeIds: string[] | null, month?: string) {
     const now = new Date();
     const key = month ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     const start = toDate(`${key}-01`);
     const range = { gte: start, lt: new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1)) };
+    const { alertHours, legalHours } = await this.overtimeThresholds();
 
-    const keys = ['overtime_alert_hours', 'overtime_legal_cap_hours'];
-    const rows = await this.prisma.timeSetting.findMany({ where: { Key: { in: keys } } });
-    // Reglage pas encore cree sur une base existante : valeur d'usine.
-    const [alertHours, legalHours] = keys.map((k) =>
-      Number(rows.find((r) => r.Key === k)?.Value ?? DEFAULT_THRESHOLDS[k]),
-    );
-
+    const scope = (
+      await this.prisma.employee.findMany({
+        where: { IsCadre: false, IsDeleted: false, IsSystem: false, ...(employeeIds ? { Id: { in: employeeIds } } : {}) },
+        select: { Id: true },
+      })
+    ).map((e) => e.Id);
     const [totals, latest] = await Promise.all([
-      this.prisma.timeOvertime.groupBy({
-        by: ['EmployeeId'],
-        where: {
-          Date: range,
-          code: { Code: { in: OVERTIME_CODES } },
-          employee: { IsCadre: false, IsDeleted: false, IsSystem: false },
-          ...(employeeIds ? { EmployeeId: { in: employeeIds } } : {}),
-        },
-        _sum: { Hours: true },
-      }),
-      // Toute ligne calculee compte : un mois calcule sans depassement n'est pas un mois non calcule.
-      this.prisma.timeOvertime.aggregate({ where: { Date: range }, _max: { Date: true } }),
+      this.monthlyOvertime(scope, key),
+      this.prisma.timeDailyHours.aggregate({ where: { Date: range }, _max: { Date: true } }),
     ]);
-    const reached = totals
-      .map((t) => ({ id: t.EmployeeId, hours: round2(Number(t._sum.Hours ?? 0)) }))
-      .filter((t) => t.hours >= alertHours!);
+    const reached = [...totals]
+      .map(([id, hours]) => ({ id, hours: round2(hours) }))
+      .filter((t) => t.hours > 0 && t.hours >= alertHours);
     const employees = reached.length
       ? await this.prisma.employee.findMany({
           where: { Id: { in: reached.map((r) => r.id) } },
@@ -763,9 +815,9 @@ export class TimeCalculationService {
     const byId = new Map(employees.map((e) => [e.Id, e]));
     return {
       Month: key,
-      AlertHours: alertHours!,
-      LegalHours: legalHours!,
-      // Date de la derniere ligne calculee du mois, null si rien n'est calcule.
+      AlertHours: alertHours,
+      LegalHours: legalHours,
+      // Dernier jour du mois avec des heures, null s'il n'y en a aucun.
       LastCalculatedDate: latest._max.Date ? dateKey(latest._max.Date) : null,
       Employees: reached
         .sort((a, b) => b.hours - a.hours)
@@ -774,7 +826,7 @@ export class TimeCalculationService {
           FullName: byId.get(r.id)?.FullName ?? '',
           EmployeeNumber: byId.get(r.id)?.EmployeeNumber ?? '',
           Hours: r.hours,
-          LegalCapReached: r.hours >= legalHours!,
+          LegalCapReached: r.hours >= legalHours,
         })),
     };
   }

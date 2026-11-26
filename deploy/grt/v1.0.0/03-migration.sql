@@ -1,5 +1,5 @@
 -- GRT : script de migration unique (a jouer apres 01-schema.sql et 02-seed.sql, avant de demarrer
--- le nouveau backend). Il regroupe neuf evolutions, dans cet ordre :
+-- le nouveau backend). Il regroupe dix evolutions, dans cet ordre :
 --   1) Messagerie : table MailSettings (configuration des emails dans l'application, Graph ou SMTP).
 --   2) Regime de conge annuel : Employee.LeaveRegime (Calendar | Working) et
 --      LeaveType.AppliesToLeaveRegime, pour les deux types de conge annuel (32 j calendaires,
@@ -12,8 +12,9 @@
 --   7) Saisies de temps : origine (ecran ou fichier) et auteur des imports de la pointeuse.
 --   8) Validation hebdomadaire : corrections de jours, controle et validation des semaines.
 --   9) Sites de travail : table TimeSite, Employee.TimeSiteId, sites Siege, Zone A et Zone B.
+--  10) Alerte heures supplementaires : table TimeOvertimeAlert, seuils d'alerte et legal a 20 h.
 -- Chaque partie est transactionnelle et rejouable. Rejouer le fichier remet les reglages des parties
--- 4 et 6 a leur valeur ci-dessous, meme s'ils ont ete changes depuis dans l'application.
+-- 4, 6 et 10 a leur valeur ci-dessous, meme s'ils ont ete changes depuis dans l'application.
 -- Donnees : reglages du temps de travail et, s'il n'existe aucun site, les trois sites du client. Aucun solde, employe ou type de conge n'est touche.
 GO
 -- Configuration de l'envoi d'emails depuis l'application (Microsoft Graph OU SMTP
@@ -398,6 +399,48 @@ IF OBJECT_ID(N'dbo.Employee_TimeSiteId_fkey', N'F') IS NULL
 
 COMMIT TRAN;
 PRINT N'Script (sites de travail) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO
+
+-- ============================================================================
+-- Alerte heures supplementaires au manager et a la RH : une seule par employe et
+-- par mois (table TimeOvertimeAlert). Seuil d'alerte et seuil legal mensuels a
+-- 20 h, modifiables ensuite dans Temps de travail > Configuration > Reglages.
+-- ============================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+BEGIN TRY
+BEGIN TRAN;
+
+IF OBJECT_ID(N'dbo.TimeOvertimeAlert', N'U') IS NULL
+    CREATE TABLE [dbo].[TimeOvertimeAlert] (
+        [Id] UNIQUEIDENTIFIER NOT NULL,
+        [EmployeeId] UNIQUEIDENTIFIER NOT NULL,
+        [Month] NVARCHAR(7) NOT NULL,
+        [Hours] DECIMAL(6,2) NOT NULL,
+        [Threshold] DECIMAL(6,2) NOT NULL,
+        [TriggeredById] UNIQUEIDENTIFIER NOT NULL,
+        [SentAt] DATETIME2 NOT NULL CONSTRAINT [TimeOvertimeAlert_SentAt_df] DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT [TimeOvertimeAlert_pkey] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [TimeOvertimeAlert_EmployeeId_Month_key] UNIQUE NONCLUSTERED ([EmployeeId],[Month])
+    );
+
+UPDATE dbo.TimeSetting SET [Value] = 20 WHERE [Key] IN (N'overtime_alert_hours', N'overtime_legal_cap_hours');
+IF NOT EXISTS (SELECT 1 FROM dbo.TimeSetting WHERE [Key] = N'overtime_alert_hours')
+    INSERT INTO dbo.TimeSetting ([Id], [Key], [Value], [Label])
+    VALUES (NEWID(), N'overtime_alert_hours', 20, N'Alerte heures sup. : seuil mensuel (heures)');
+IF NOT EXISTS (SELECT 1 FROM dbo.TimeSetting WHERE [Key] = N'overtime_legal_cap_hours')
+    INSERT INTO dbo.TimeSetting ([Id], [Key], [Value], [Label])
+    VALUES (NEWID(), N'overtime_legal_cap_hours', 20, N'Plafond légal mensuel d''heures supplémentaires');
+
+COMMIT TRAN;
+PRINT N'Script (alerte heures supplementaires) applique.';
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;

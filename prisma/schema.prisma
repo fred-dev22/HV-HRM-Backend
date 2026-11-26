@@ -2356,12 +2356,27 @@ model TimeWeekValidation {
   @@index([WeekStart])
 }
 
+/// Alerte heures supplementaires envoyee au manager et a la RH : une seule par
+/// employe et par mois.
+model TimeOvertimeAlert {
+  Id            String   @id @default(uuid()) @db.UniqueIdentifier
+  EmployeeId    String   @db.UniqueIdentifier
+  // Mois au format AAAA-MM.
+  Month         String   @db.NVarChar(7)
+  Hours         Decimal  @db.Decimal(6, 2)
+  Threshold     Decimal  @db.Decimal(6, 2)
+  TriggeredById String   @db.UniqueIdentifier
+  SentAt        DateTime @default(now()) @db.DateTime2
+
+  @@unique([EmployeeId, Month])
+}
+
 /// Journal d'une semaine : corrections, controle, validation, reouverture.
 model TimeWeekHistory {
   Id         String   @id @default(uuid()) @db.UniqueIdentifier
   EmployeeId String   @db.UniqueIdentifier
   WeekStart  DateTime @db.Date
-  // Action: CORRECT | CONTROL | UNCONTROL | VALIDATE | REOPEN
+  // Action: CORRECT | CONTROL | UNCONTROL | VALIDATE | REOPEN | ALERT
   Action    String   @db.NVarChar(20)
   ActorId   String   @db.UniqueIdentifier
   Comment   String?  @db.NVarChar(500)

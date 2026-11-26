@@ -10,6 +10,8 @@ import { MorphoController } from './morpho/morpho.controller';
 import { MorphoService } from './morpho/morpho.service';
 import { TimeSettingsController } from './settings/time-settings.controller';
 import { TimeSettingsService } from './settings/time-settings.service';
+import { MailModule } from '../mail/mail.module';
+import { OvertimeAlertService } from './alerts/overtime-alert.service';
 import { TimeSitesController } from './sites/time-sites.controller';
 import { TimeSitesService } from './sites/time-sites.service';
 import { TimeWeekController } from './weeks/time-week.controller';
@@ -19,8 +21,8 @@ import { TimeWeekService } from './weeks/time-week.service';
 // export Sage). Desactivable par client (cle 'time' de brand/client.json).
 // PrismaModule est @Global. Enregistre dans app.module.ts.
 @Module({
-  imports: [CalendarModule, NotificationModule, ApprovalPoolModule],
+  imports: [CalendarModule, NotificationModule, ApprovalPoolModule, MailModule],
   controllers: [TimeSettingsController, MorphoController, TimeCalculationController, TimeEntryController, TimeWeekController, TimeSitesController],
-  providers: [TimeSettingsService, TimeCalculationService, MorphoService, TimeEntryService, TimeWeekService, TimeSitesService],
+  providers: [TimeSettingsService, TimeCalculationService, MorphoService, TimeEntryService, TimeWeekService, TimeSitesService, OvertimeAlertService],
 })
 export class TimeModule {}
