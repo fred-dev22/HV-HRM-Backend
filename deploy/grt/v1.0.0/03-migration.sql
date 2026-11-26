@@ -1,5 +1,5 @@
 -- GRT : script de migration unique (a jouer apres 01-schema.sql et 02-seed.sql, avant de demarrer
--- le nouveau backend). Il regroupe huit evolutions, dans cet ordre :
+-- le nouveau backend). Il regroupe neuf evolutions, dans cet ordre :
 --   1) Messagerie : table MailSettings (configuration des emails dans l'application, Graph ou SMTP).
 --   2) Regime de conge annuel : Employee.LeaveRegime (Calendar | Working) et
 --      LeaveType.AppliesToLeaveRegime, pour les deux types de conge annuel (32 j calendaires,
@@ -11,9 +11,10 @@
 --      employe, panier reserve au service continu.
 --   7) Saisies de temps : origine (ecran ou fichier) et auteur des imports de la pointeuse.
 --   8) Validation hebdomadaire : corrections de jours, controle et validation des semaines.
+--   9) Sites de travail : table TimeSite, Employee.TimeSiteId, sites Siege, Zone A et Zone B.
 -- Chaque partie est transactionnelle et rejouable. Rejouer le fichier remet les reglages des parties
 -- 4 et 6 a leur valeur ci-dessous, meme s'ils ont ete changes depuis dans l'application.
--- Seules donnees modifiees : des reglages du temps de travail. Aucun solde, employe ou type de conge n'est touche.
+-- Donnees : reglages du temps de travail et, s'il n'existe aucun site, les trois sites du client. Aucun solde, employe ou type de conge n'est touche.
 GO
 -- Configuration de l'envoi d'emails depuis l'application (Microsoft Graph OU SMTP
 -- avec le nom de domaine du client), dans l'espace Parametres de l'application
@@ -348,6 +349,55 @@ IF NOT EXISTS (SELECT 1 FROM dbo.TimeSetting WHERE [Key] = N'require_week_valida
 
 COMMIT TRAN;
 PRINT N'Script (validation hebdomadaire) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO
+
+-- ============================================================================
+-- Sites de travail : minutes de trajet et de changement retirees de la presence
+-- sur site (a l'arrivee et au depart) des employes non cadres. Les trois sites
+-- sont crees a 0 minute s'il n'en existe aucun : saisir les minutes dans Temps
+-- de travail > Configuration > Sites, puis rattacher les employes. Rejouable.
+-- ============================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+BEGIN TRY
+BEGIN TRAN;
+
+IF OBJECT_ID(N'dbo.TimeSite', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[TimeSite] (
+        [Id] UNIQUEIDENTIFIER NOT NULL,
+        [Code] NVARCHAR(20) NOT NULL,
+        [Name] NVARCHAR(100) NOT NULL,
+        [DeductionMinutes] INT NOT NULL CONSTRAINT [TimeSite_DeductionMinutes_df] DEFAULT 0,
+        CONSTRAINT [TimeSite_pkey] PRIMARY KEY CLUSTERED ([Id]),
+        CONSTRAINT [TimeSite_Code_key] UNIQUE NONCLUSTERED ([Code]),
+        CONSTRAINT [TimeSite_Name_key] UNIQUE NONCLUSTERED ([Name])
+    );
+    EXEC(N'INSERT INTO [dbo].[TimeSite] ([Id], [Code], [Name], [DeductionMinutes]) VALUES
+        (NEWID(), N''SIEGE'', N''Siège'', 0),
+        (NEWID(), N''ZONE_A'', N''Zone A'', 0),
+        (NEWID(), N''ZONE_B'', N''Zone B'', 0);');
+END;
+
+IF COL_LENGTH('dbo.Employee', 'TimeSiteId') IS NULL
+    ALTER TABLE [dbo].[Employee] ADD [TimeSiteId] UNIQUEIDENTIFIER NULL;
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'Employee_TimeSiteId_idx' AND object_id = OBJECT_ID(N'dbo.Employee'))
+    EXEC(N'CREATE NONCLUSTERED INDEX [Employee_TimeSiteId_idx] ON [dbo].[Employee]([TimeSiteId]);');
+
+IF OBJECT_ID(N'dbo.Employee_TimeSiteId_fkey', N'F') IS NULL
+    EXEC(N'ALTER TABLE [dbo].[Employee] ADD CONSTRAINT [Employee_TimeSiteId_fkey]
+        FOREIGN KEY ([TimeSiteId]) REFERENCES [dbo].[TimeSite]([Id]) ON DELETE NO ACTION ON UPDATE NO ACTION;');
+
+COMMIT TRAN;
+PRINT N'Script (sites de travail) applique.';
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;

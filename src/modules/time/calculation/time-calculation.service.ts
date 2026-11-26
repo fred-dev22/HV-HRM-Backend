@@ -17,6 +17,7 @@ import {
   computeOvertimeLines,
   computePanierDays,
   computePermanenceLines,
+  deductTravel,
   longestContinuousHours,
   mondayOf,
   weeklyOvertimeByDay,
@@ -270,7 +271,7 @@ export class TimeCalculationService {
           Date: range,
           ...(employeeIds ? { EmployeeId: { in: employeeIds } } : {}),
         },
-        select: { EmployeeId: true, Date: true, Hours: true, FirstClockIn: true, LastClockOut: true },
+        select: { EmployeeId: true, Date: true, EntryType: true, Hours: true, FirstClockIn: true, LastClockOut: true },
       }),
     ]);
     const records = buildWorkRecords(
@@ -286,6 +287,7 @@ export class TimeCalculationService {
         start: d.FirstClockIn,
         end: d.LastClockOut,
         hours: Number(d.Hours),
+        remote: d.EntryType !== 'travail_sur_site',
       })),
     );
     const who = employeeIds ? { EmployeeId: { in: employeeIds } } : {};
@@ -306,16 +308,33 @@ export class TimeCalculationService {
         recordFromPunches(c.EmployeeId, day, parseJson<DayPunch[]>(c.Punches, []), Number(c.ExtraHours)),
       );
     }
+    // Minutes de trajet figees avec les semaines validees.
+    const frozenMinutes = new Map<string, number>();
     // Une semaine validee est figee : ses jours passent avant tout le reste.
     for (const week of validated) {
       for (const d of parseJson<FrozenDay[]>(week.Snapshot, [])) {
         if (d.date < from || d.date > to) continue;
         const key = `${week.EmployeeId}|${d.date}`;
+        frozenMinutes.set(key, d.travelMinutes ?? 0);
         if (d.punches.length || d.extraHours) records.set(key, recordFromPunches(week.EmployeeId, d.date, d.punches, d.extraHours));
         else records.delete(key);
       }
     }
+    if (records.size === 0) return records;
+    const travel = await this.loadTravelMinutes([...new Set([...records.values()].map((r) => r.employeeId))]);
+    for (const [key, record] of records) {
+      records.set(key, deductTravel(record, frozenMinutes.get(key) ?? travel.get(record.employeeId) ?? 0));
+    }
     return records;
+  }
+
+  // Minutes de trajet et de changement par employe : non-cadres rattaches a un site.
+  async loadTravelMinutes(employeeIds: string[]): Promise<Map<string, number>> {
+    const rows = await this.prisma.employee.findMany({
+      where: { Id: { in: employeeIds }, IsCadre: false, TimeSiteId: { not: null } },
+      select: { Id: true, timeSite: { select: { DeductionMinutes: true } } },
+    });
+    return new Map(rows.map((e) => [e.Id, e.timeSite?.DeductionMinutes ?? 0]));
   }
 
   // Paniers et permanences decides a la validation hebdomadaire, par `employe|jour`
@@ -947,15 +966,18 @@ export class TimeCalculationService {
     const dayByKey = new Map(days.map((d) => [dateKey(d.Date), d]));
     const requiredMap = await this.requiredPerDay([employeeId], from, to);
     const raw: { required: number; worked: number; overtime: number; absence: number }[] = [];
-    const rows: { date: string; required: number; worked: number; overtime: number; absence: number; in: string | null; out: string | null }[] = [];
+    const rows: {
+      date: string; required: number; worked: number; overtime: number; absence: number;
+      in: string | null; out: string | null; travelMinutes: number;
+    }[] = [];
     let cursor = from;
     while (cursor <= to) {
       const d = dayByKey.get(cursor);
       const required = requiredMap.get(`${employeeId}|${cursor}`) ?? 0;
       const worked = d ? Number(d.WorkedHours) : 0;
       const record = records.get(`${employeeId}|${cursor}`);
-      // Une saisie en duree seule n'a pas d'heure d'entree ni de sortie.
-      const c = record && record.intervals?.length ? record : null;
+      // Heures telles que pointees (avant le trajet) ; une saisie en duree seule n'en a pas.
+      const c = record?.badge ?? (record?.intervals?.length ? { start: record.firstClock, end: record.lastClock } : null);
       const overtime = overtimeMap.get(`${employeeId}|${cursor}`) ?? 0;
       raw.push({ required, worked, overtime, absence: Math.max(0, required - worked) });
       rows.push({
@@ -964,8 +986,9 @@ export class TimeCalculationService {
         worked: round2(worked),
         overtime: round2(overtime),
         absence: round2(Math.max(0, required - worked)),
-        in: c ? c.firstClock.toISOString() : null,
-        out: c ? c.lastClock.toISOString() : null,
+        in: c && c.end > c.start ? c.start.toISOString() : null,
+        out: c && c.end > c.start ? c.end.toISOString() : null,
+        travelMinutes: Math.round((record?.travelHours ?? 0) * 60),
       });
       cursor = dateKey(new Date(toDate(cursor).getTime() + 86_400_000));
     }

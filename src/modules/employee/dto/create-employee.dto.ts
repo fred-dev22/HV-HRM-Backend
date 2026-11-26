@@ -103,6 +103,11 @@ export class CreateEmployeeDto {
   @IsBoolean()
   IsCadre?: boolean;
 
+  // Site de travail (module Temps) ; null : aucun. Voir TimeSite (schema.prisma).
+  @IsOptional()
+  @IsUUID()
+  TimeSiteId?: string | null;
+
   // Regime de conge annuel (GRT) : Calendar (jours calendaires) | Working (jours
   // ouvrables). Voir Employee.LeaveRegime (schema.prisma).
   @IsOptional()

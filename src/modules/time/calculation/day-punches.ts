@@ -12,7 +12,12 @@ export interface DayPunch {
   // La sortie a lieu le lendemain.
   nextDay: boolean;
   source: PunchSource;
+  // false : travail hors du site (aucun trajet retire). Absent : voir isOnSite.
+  onSite?: boolean;
 }
+
+// La pointeuse et les corrections sont de la presence sur site, sauf mention contraire.
+export const isOnSite = (p: DayPunch) => p.onSite ?? (p.source === 'Morpho' || p.source === 'Corrected');
 
 export const clockOf = (value: Date): string =>
   `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
@@ -20,8 +25,21 @@ export const clockOf = (value: Date): string =>
 const localKey = (value: Date): string =>
   `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 
-export function punchFromDates(start: Date | null, end: Date | null, dateKey: string, source: PunchSource): DayPunch {
-  return { start: start ? clockOf(start) : null, end: end ? clockOf(end) : null, nextDay: !!end && localKey(end) > dateKey, source };
+export function punchFromDates(
+  start: Date | null,
+  end: Date | null,
+  dateKey: string,
+  source: PunchSource,
+  // Seulement pour une saisie : "travail sur site" ou non.
+  onSite?: boolean,
+): DayPunch {
+  return {
+    start: start ? clockOf(start) : null,
+    end: end ? clockOf(end) : null,
+    nextDay: !!end && localKey(end) > dateKey,
+    source,
+    ...(onSite === undefined ? {} : { onSite }),
+  };
 }
 
 export const sortPunches = (punches: DayPunch[]): DayPunch[] =>
@@ -49,7 +67,8 @@ export function recordFromPunches(employeeId: string, dateKey: string, punches: 
   for (const p of punches) {
     const interval = intervalOf(p, dateKey);
     if (!interval) continue;
-    if (p.source === 'Morpho' && !punch) punch = interval;
+    if (!isOnSite(p)) declaredIntervals.push({ ...interval, remote: true });
+    else if (p.source === 'Morpho' && !punch) punch = interval;
     else declaredIntervals.push(interval);
   }
   const intervals = mergeIntervals([...(punch ? [punch] : []), ...declaredIntervals]);
@@ -75,6 +94,8 @@ export interface FrozenDay {
   extraHours: number;
   panier: boolean;
   permanence: boolean;
+  // Minutes de trajet du site au moment de la validation.
+  travelMinutes?: number;
 }
 
 export function parseJson<T>(value: string | null | undefined, fallback: T): T {

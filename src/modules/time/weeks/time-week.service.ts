@@ -18,6 +18,7 @@ import {
   FrozenDay,
   intervalOf,
   isIncompletePunch,
+  isOnSite,
   parseJson,
   punchFromDates,
   samePunch,
@@ -56,6 +57,8 @@ export interface WeekDay {
   corrected: boolean;
   incomplete: boolean;
   pendingEntryIds: string[];
+  // Minutes de trajet et de changement retirees ce jour.
+  travelDeducted: number;
 }
 
 export interface ComputedWeek {
@@ -66,6 +69,8 @@ export interface ComputedWeek {
   controlledAt: Date | null;
   validatedById: string | null;
   validatedAt: Date | null;
+  // Site de l'employe et minutes appliquees (figees si la semaine est validee).
+  site: { name: string; minutes: number } | null;
   days: WeekDay[];
   totals: { worked: number; overtime: number; hs130: number; hs150: number; night: number; holiday: number; panier: number; permanenceAmount: number };
 }
@@ -83,7 +88,15 @@ export function correctedPunches(dateKey: string, sent: NonNullable<WeekDayDto['
           throw new BadRequestException(`${label} : la sortie doit être après l'entrée (ou à saisir en sortie du lendemain)`);
         }
         const same = current.find((c) => samePunch(c, punch));
-        return same ? { ...punch, source: same.source } : punch;
+        if (same) return { ...punch, source: same.source, ...(same.onSite === undefined ? {} : { onSite: same.onSite }) };
+        // Corriger une periode hors site la laisse hors site.
+        const interval = intervalOf(punch, dateKey);
+        const remote = current.some((c) => {
+          if (isOnSite(c)) return false;
+          const other = intervalOf(c, dateKey);
+          return interval && other ? interval.start < other.end && other.start < interval.end : c.start === punch.start;
+        });
+        return remote ? { ...punch, onSite: false } : punch;
       }),
   );
   const intervals = punches.map((p) => intervalOf(p, dateKey)).filter((i) => i !== null);
@@ -120,7 +133,7 @@ export class TimeWeekService {
     const range = { gte: toDate(monday), lte: toDate(sunday) };
     const ids = { in: employeeIds };
 
-    const [settings, options, rates, employees, holidayRows, ancestors, records, punches, entries, corrections, validations, leaves] =
+    const [settings, options, rates, employees, holidayRows, ancestors, records, punches, entries, corrections, validations, leaves, sites] =
       await Promise.all([
         this.calculation.loadSettings(),
         this.calculation.loadCorrections({}),
@@ -148,6 +161,10 @@ export class TimeWeekService {
             StartDate: { lte: toDate(sunday) }, EndDate: { gte: toDate(monday) },
           },
           select: { EmployeeId: true, StartDate: true, EndDate: true, leaveType: { select: { Name: true } } },
+        }),
+        this.prisma.employee.findMany({
+          where: { Id: ids, TimeSiteId: { not: null } },
+          select: { Id: true, timeSite: { select: { Name: true, DeductionMinutes: true } } },
         }),
       ]);
 
@@ -215,14 +232,24 @@ export class TimeWeekService {
           }
           for (const e of dayEntries) {
             if (e.Status === 'Approved' && WORK_ENTRY_TYPES.includes(e.EntryType ?? '') && (e.FirstClockIn || e.LastClockOut)) {
-              list.push(punchFromDates(e.FirstClockIn, e.LastClockOut, date, e.Source === 'Import' ? 'Import' : 'Manual'));
+              list.push(
+                punchFromDates(
+                  e.FirstClockIn, e.LastClockOut, date, e.Source === 'Import' ? 'Import' : 'Manual',
+                  e.EntryType === 'travail_sur_site',
+                ),
+              );
             }
           }
         }
         const waiting = dayEntries.filter((e) => e.Status === 'Pending');
         const waitingPunches = waiting
           .filter((e) => WORK_ENTRY_TYPES.includes(e.EntryType ?? '') && (e.FirstClockIn || e.LastClockOut))
-          .map((e) => ({ ...punchFromDates(e.FirstClockIn, e.LastClockOut, date, e.Source === 'Import' ? 'Import' : 'Manual'), pending: true }));
+          .map((e) => ({
+            ...punchFromDates(
+              e.FirstClockIn, e.LastClockOut, date, e.Source === 'Import' ? 'Import' : 'Manual', e.EntryType === 'travail_sur_site',
+            ),
+            pending: true,
+          }));
 
         const panier = fixed ? fixed.panier : (correction?.Panier ?? autoPanier.has(date));
         const permanence = fixed
@@ -245,8 +272,11 @@ export class TimeWeekService {
           corrected: !!correction && (correction.Punches != null || correction.Panier != null || correction.Permanence != null),
           incomplete: list.some(isIncompletePunch),
           pendingEntryIds: waiting.map((e) => e.Id),
+          travelDeducted: Math.round((record?.travelHours ?? 0) * 60),
         };
       });
+      const ownSite = employee.isCadre ? null : sites.find((s) => s.Id === id)?.timeSite;
+      const frozenMinutes = [...frozen.values()][0]?.travelMinutes;
 
       // Repartition de la semaine par taux, avant le plafond non imposable (calcule en paie).
       const lines = employee.isCadre
@@ -270,6 +300,7 @@ export class TimeWeekService {
         controlledAt: validation?.ControlledAt ?? null,
         validatedById: validation?.ValidatedById ?? null,
         validatedAt: validation?.ValidatedAt ?? null,
+        site: ownSite ? { name: ownSite.Name, minutes: frozenMinutes ?? ownSite.DeductionMinutes } : null,
         days: weekDays,
         totals: {
           worked: round2(days.reduce((s, d) => s + d.workedHours, 0)),
@@ -383,6 +414,7 @@ export class TimeWeekService {
       ControlledAt: computed.controlledAt,
       ValidatedBy: nameOf(computed.validatedById),
       ValidatedAt: computed.validatedAt,
+      Site: computed.site,
       Days: computed.days,
       Totals: computed.totals,
       // Ce qui empeche de controler ou valider.
@@ -492,6 +524,7 @@ export class TimeWeekService {
       extraHours: d.extraHours,
       panier: d.panier,
       permanence: d.permanence,
+      travelMinutes: week.site?.minutes ?? 0,
     }));
     const data = { Status: 'Validated', ValidatedById: me, ValidatedAt: new Date(), Snapshot: JSON.stringify(snapshot) };
     await this.setStatus(employeeId, monday, data, 'VALIDATE', me, week.status === 'Open' ? 'Validée sans contrôle préalable' : undefined);

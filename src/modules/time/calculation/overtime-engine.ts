@@ -73,6 +73,8 @@ export interface DayHours {
 export interface Interval {
   start: Date;
   end: Date;
+  // Travail hors du site (mission, reunion...) : aucun trajet n'en est retire.
+  remote?: boolean;
 }
 
 export interface ClockRecord {
@@ -91,6 +93,10 @@ export interface ClockRecord {
   // saisies. Les deux absents : tout vient de la pointeuse.
   punch?: Interval;
   declaredIntervals?: Interval[];
+  // Presents quand du temps de trajet a ete retire : heures de la pointeuse
+  // telles quelles (pour l'affichage) et duree retiree.
+  badge?: Interval;
+  travelHours?: number;
 }
 
 export const intervalsOf = (r: ClockRecord): Interval[] => r.intervals ?? [{ start: r.firstClock, end: r.lastClock }];
@@ -301,6 +307,44 @@ export function applyMonthlyNiCap(
       remaining -= convertible;
     }
   }
+}
+
+// Retire le trajet et le changement de la presence sur site : `minutes` apres la
+// premiere arrivee et `minutes` avant le dernier depart du jour (une seule fois,
+// quel que soit le nombre de periodes). 07:00-17:30 avec 15 min devient
+// 07:15-17:15. Les heures de nuit et supplementaires partent du resultat.
+export function deductTravel(record: ClockRecord, minutes: number): ClockRecord {
+  if (!minutes) return record;
+  const punched = record.punch !== undefined || record.declaredIntervals !== undefined;
+  const punch = punched ? record.punch : intervalsOf(record)[0];
+  const declared = record.declaredIntervals ?? [];
+  const onSite = [...(punch ? [punch] : []), ...declared].filter((i) => !i.remote && i.end > i.start);
+  if (!onSite.length) return record;
+
+  const from = Math.min(...onSite.map((i) => i.start.getTime())) + minutes * 60_000;
+  const to = Math.max(...onSite.map((i) => i.end.getTime())) - minutes * 60_000;
+  const clip = (i: Interval): Interval | null => {
+    if (i.remote) return i;
+    const start = Math.max(i.start.getTime(), from);
+    const end = Math.min(i.end.getTime(), to);
+    return end > start ? { start: new Date(start), end: new Date(end) } : null;
+  };
+  const newPunch = punch ? (clip(punch) ?? undefined) : undefined;
+  const newDeclared = declared.map(clip).filter((i): i is Interval => i !== null);
+  const before = mergeIntervals([...(punch ? [punch] : []), ...declared]);
+  const intervals = mergeIntervals([...(newPunch ? [newPunch] : []), ...newDeclared]);
+  const total = (list: Interval[]) => list.reduce((sum, i) => sum + hoursBetween(i), 0);
+  const midnight = new Date(`${record.dateKey}T00:00:00`);
+  return {
+    ...record,
+    punch: newPunch,
+    declaredIntervals: newDeclared,
+    intervals,
+    firstClock: intervals[0]?.start ?? midnight,
+    lastClock: intervals[intervals.length - 1]?.end ?? midnight,
+    badge: { start: record.firstClock, end: record.lastClock },
+    travelHours: total(before) - total(intervals),
+  };
 }
 
 // Heures de nuit d'un jour, toutes plages confondues.

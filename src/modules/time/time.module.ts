@@ -10,6 +10,8 @@ import { MorphoController } from './morpho/morpho.controller';
 import { MorphoService } from './morpho/morpho.service';
 import { TimeSettingsController } from './settings/time-settings.controller';
 import { TimeSettingsService } from './settings/time-settings.service';
+import { TimeSitesController } from './sites/time-sites.controller';
+import { TimeSitesService } from './sites/time-sites.service';
 import { TimeWeekController } from './weeks/time-week.controller';
 import { TimeWeekService } from './weeks/time-week.service';
 
@@ -18,7 +20,7 @@ import { TimeWeekService } from './weeks/time-week.service';
 // PrismaModule est @Global. Enregistre dans app.module.ts.
 @Module({
   imports: [CalendarModule, NotificationModule, ApprovalPoolModule],
-  controllers: [TimeSettingsController, MorphoController, TimeCalculationController, TimeEntryController, TimeWeekController],
-  providers: [TimeSettingsService, TimeCalculationService, MorphoService, TimeEntryService, TimeWeekService],
+  controllers: [TimeSettingsController, MorphoController, TimeCalculationController, TimeEntryController, TimeWeekController, TimeSitesController],
+  providers: [TimeSettingsService, TimeCalculationService, MorphoService, TimeEntryService, TimeWeekService, TimeSitesService],
 })
 export class TimeModule {}

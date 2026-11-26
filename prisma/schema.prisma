@@ -234,6 +234,9 @@ model Employee {
   // = identifiant de l'employe dans la pointeuse Morpho (colonne 1 des exports),
   // le rapprochement se fait d'abord par cet identifiant, puis par matricule.
   IsCadre       Boolean @default(false)
+  // Site de travail (module Temps) : ses minutes de trajet et de changement sont
+  // retirees de la presence d'un non-cadre.
+  TimeSiteId    String? @db.UniqueIdentifier
   BiometricUuid String? @db.NVarChar(100)
 
   CreatedBy  String    @db.UniqueIdentifier
@@ -248,6 +251,7 @@ model Employee {
   position           Position?         @relation(fields: [PositionId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   directValidator    Employee?         @relation("EmployeeDirectValidator", fields: [DirectValidatorId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   directValidatorFor Employee[]        @relation("EmployeeDirectValidator")
+  timeSite           TimeSite?         @relation(fields: [TimeSiteId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   validatorInterim   Employee?         @relation("EmployeeValidatorInterim", fields: [ValidatorInterimId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
   validatorInterimFor Employee[]       @relation("EmployeeValidatorInterim")
   organizationUnit   OrganizationUnit  @relation("EmployeeOrganizationUnit", fields: [OrganizationUnitId], references: [Id], onDelete: NoAction, onUpdate: NoAction)
@@ -389,6 +393,7 @@ model Employee {
   @@index([EmployeeCategoryId])
   @@index([DirectValidatorId])
   @@index([ValidatorInterimId])
+  @@index([TimeSiteId])
 }
 
 /// Compte utilisateur donnant acces a la plateforme AfrikEdge / Productive
@@ -2300,6 +2305,16 @@ model TimeOvertime {
 
   @@index([EmployeeId, Date])
   @@index([CodeId])
+}
+
+/// Site de travail et temps de trajet et de changement, en minutes, retire a
+/// l'arrivee et au depart de ses employes non cadres.
+model TimeSite {
+  Id               String     @id @default(uuid()) @db.UniqueIdentifier
+  Code             String     @unique @db.NVarChar(20)
+  Name             String     @unique @db.NVarChar(100)
+  DeductionMinutes Int        @default(0)
+  employees        Employee[]
 }
 
 /// Correction d'un jour par un manager ou le RH (ecran de validation

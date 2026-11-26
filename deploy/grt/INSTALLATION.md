@@ -24,7 +24,7 @@ Sur la base vide, dans cet ordre (chaque script est transactionnel) :
 
 1. `v1.0.0/01-schema.sql`
 2. `v1.0.0/02-seed.sql`
-3. `v1.0.0/03-migration.sql` (script unique : messagerie, regime de conge annuel, interimaire du validateur direct, calcul des heures sup a la semaine, stockage des fichiers, regles du temps de travail, origine des saisies, validation hebdomadaire ; rejouable, il remet les reglages du temps a leur valeur de livraison)
+3. `v1.0.0/03-migration.sql` (script unique : messagerie, regime de conge annuel, interimaire du validateur direct, calcul des heures sup a la semaine, stockage des fichiers, regles du temps de travail, origine des saisies, validation hebdomadaire, sites ; rejouable, il remet les reglages du temps a leur valeur de livraison)
 
 Le compte administrateur est cree avec le mot de passe de `ADMIN-CREDENTIALS.txt`, a changer obligatoirement a la premiere connexion.
 

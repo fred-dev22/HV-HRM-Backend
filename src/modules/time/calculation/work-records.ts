@@ -22,6 +22,8 @@ export interface DeclaredRow {
   end: Date | null;
   // Duree declaree, utilisee quand la saisie n'a pas d'horaires.
   hours: number;
+  // Hors du site : aucun trajet retire.
+  remote?: boolean;
 }
 
 export function buildWorkRecords(punches: PunchRow[], declared: DeclaredRow[]): Map<string, ClockRecord> {
@@ -57,7 +59,7 @@ export function buildWorkRecords(punches: PunchRow[], declared: DeclaredRow[]): 
   for (const d of declared) {
     const day = dayOf(d.employeeId, d.dateKey);
     day.declared = true;
-    if (d.start && d.end) day.declaredIntervals.push({ start: d.start, end: d.end });
+    if (d.start && d.end) day.declaredIntervals.push({ start: d.start, end: d.end, ...(d.remote ? { remote: true } : {}) });
     else day.extraHours += d.hours;
   }
 
