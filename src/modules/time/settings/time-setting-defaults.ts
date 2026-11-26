@@ -20,6 +20,6 @@ export const TIME_SETTINGS: { Key: string; Value: number; Label: string }[] = [
   // Corrections par rapport au systeme Pointage. 1 = active. La pause n'est pas
   // retiree tant que le client ne l'a pas validee ; les samedis et dimanches
   // travailles comptent (reunion du 25/11).
-  { Key: 'deduct_break', Value: 0, Label: 'Retirer la pause du temps travaillé (1 = oui)' },
+  { Key: 'deduct_break', Value: 0, Label: 'Retirer la pause quand les pointages la couvrent (1 = oui)' },
   { Key: 'include_non_working_days', Value: 1, Label: 'Compter les jours non travaillés pointés, dimanche inclus (1 = oui)' },
 ];

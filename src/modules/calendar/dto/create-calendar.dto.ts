@@ -23,7 +23,7 @@ export class CreateCalendarDto {
   IsDefault?: boolean;
 
   // Absent/null = calendrier global. Une catégorie n'a jamais plus d'un
-  // calendrier dédié (contrainte @unique en base, voir schema.prisma).
+  // calendrier dédié (vérifié par CalendarService).
   @IsOptional()
   @IsUUID()
   EmployeeCategoryId?: string;

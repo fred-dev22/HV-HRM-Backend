@@ -248,7 +248,9 @@ export class MorphoService implements OnModuleInit {
     if (dateKeys.length === 0) return;
     const sorted = [...dateKeys].sort();
     try {
-      await this.calculation.calculateDailyHours(sorted[0]!, sorted[sorted.length - 1]!);
+      // La veille aussi : la sortie d'un poste de nuit est datee du lendemain.
+      const before = new Date(toDate(sorted[0]!).getTime() - 86_400_000).toISOString().slice(0, 10);
+      await this.calculation.calculateDailyHours(before, sorted[sorted.length - 1]!);
     } catch (err) {
       this.logger.error(`Calcul des heures du jour échoué : ${err instanceof Error ? err.message : String(err)}`);
     }

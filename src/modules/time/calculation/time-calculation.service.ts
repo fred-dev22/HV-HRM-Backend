@@ -28,15 +28,21 @@ import {
   type OvertimeCategory,
   type ClockRecord,
   type DayHours,
+  type BreakWindow,
 } from './overtime-engine';
+import { pairNightShifts, type DaySpan, type NightScheduleOf } from './night-shifts';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
 
 // Horaire d'un calendrier, par jour de semaine (0 = dimanche).
 export interface Schedule {
   required: (number | null)[];
-  breakHours: number[];
-  breaks: ({ start: string; end: string } | null)[];
+  breaks: (BreakWindow | null)[];
+  // Horaire du jour en clair (null : jour non travaille).
+  hours: ({ start: string; end: string } | null)[];
+  // D'ou vient le calendrier applique a l'employe.
+  source: 'employee' | 'category' | 'global';
+  name: string;
 }
 
 export interface DailyHoursResult {
@@ -231,8 +237,8 @@ export class TimeCalculationService {
     const cached = cache.get(calendar.Id);
     if (cached) return cached;
     const required: (number | null)[] = Array(7).fill(null);
-    const breakHours: number[] = Array(7).fill(0);
     const breaks: Schedule['breaks'] = Array(7).fill(null);
+    const hours: Schedule['hours'] = Array(7).fill(null);
     for (const wd of calendar.workDays) {
       const idx = DAY_NAMES.indexOf(wd.DayOfWeek as (typeof DAY_NAMES)[number]);
       if (idx < 0) continue;
@@ -244,16 +250,61 @@ export class TimeCalculationService {
         breakEnd: wd.BreakEnabled ? hhmm(wd.BreakEndTime) : null,
       };
       required[idx] = requiredHoursOfSchedule(day);
+      if (!day.isWorkingDay) continue;
+      if (day.startTime && day.endTime) hours[idx] = { start: day.startTime, end: day.endTime };
       if (day.breakStart && day.breakEnd) {
-        const [bh, bm] = day.breakStart.split(':').map(Number);
-        const [eh, em] = day.breakEnd.split(':').map(Number);
-        breakHours[idx] = (eh! * 60 + em! - (bh! * 60 + bm!)) / 60;
-        if (day.isWorkingDay) breaks[idx] = { start: day.breakStart, end: day.breakEnd };
+        const overnight = !!day.startTime && !!day.endTime && day.endTime < day.startTime;
+        const nextDay = overnight && day.breakStart < day.startTime!;
+        breaks[idx] = { start: day.breakStart, end: day.breakEnd, ...(nextDay ? { nextDay } : {}) };
       }
     }
-    const value = { required, breakHours, breaks };
+    const source: Schedule['source'] = calendar.EmployeeId ? 'employee' : calendar.EmployeeCategoryId ? 'category' : 'global';
+    const value = { required, breaks, hours, source, name: calendar.Name };
     cache.set(calendar.Id, value);
     return value;
+  }
+
+  // Passages de la pointeuse de la periode, une plage par employe et par jour. Les
+  // postes de nuit (horaire finissant le lendemain) sont reconstitues : la veille
+  // et le lendemain de la periode sont lus pour cela.
+  async loadPunchSpans(from: string, to: string, employeeIds?: string[]): Promise<DaySpan[]> {
+    const day = 86_400_000;
+    const rows = await this.prisma.timeMorphoRecord.findMany({
+      where: {
+        EmployeeId: employeeIds ? { in: employeeIds } : { not: null },
+        DateJour: { gte: new Date(toDate(from).getTime() - day), lte: new Date(toDate(to).getTime() + day) },
+      },
+      select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
+    });
+    // Plusieurs lignes le meme jour (fichiers qui se recouvrent) : une seule plage.
+    const merged = new Map<string, DaySpan>();
+    for (const r of rows) {
+      const key = `${r.EmployeeId}|${dateKey(r.DateJour)}`;
+      const span = merged.get(key);
+      if (!span) {
+        merged.set(key, { employeeId: r.EmployeeId!, dateKey: dateKey(r.DateJour), first: r.PremierPointage, last: r.DernierPointage });
+      } else {
+        if (r.PremierPointage < span.first) span.first = r.PremierPointage;
+        if (r.DernierPointage > span.last) span.last = r.DernierPointage;
+      }
+    }
+    let spans = [...merged.values()];
+    const nightFor = spans.length ? await this.nightSchedules([...new Set(spans.map((s) => s.employeeId))]) : null;
+    if (nightFor) spans = pairNightShifts(spans, nightFor);
+    return spans.filter((s) => s.dateKey >= from && s.dateKey <= to);
+  }
+
+  // Horaires de nuit des employes ; null quand aucun calendrier n'en contient.
+  private async nightSchedules(employeeIds: string[]): Promise<NightScheduleOf | null> {
+    const days = await this.prisma.calendarWorkDay.findMany({ where: { IsEnabled: true }, select: { StartTime: true, EndTime: true } });
+    if (!days.some((d) => d.StartTime && d.EndTime && d.EndTime < d.StartTime)) return null;
+    const cache = new Map<string, Schedule>();
+    const schedules = new Map<string, Schedule | null>();
+    for (const id of employeeIds) schedules.set(id, await this.scheduleOf(id, cache));
+    return (employeeId, key) => {
+      const hours = schedules.get(employeeId)?.hours[toDate(key).getUTCDay()];
+      return hours && hours.end < hours.start ? hours : null;
+    };
   }
 
   // Temps travaille de la periode, par `employe|jour` : pointeuse et saisies de
@@ -261,10 +312,7 @@ export class TimeCalculationService {
   async loadWorkRecords(from: string, to: string, employeeIds?: string[]): Promise<Map<string, ClockRecord>> {
     const range = { gte: toDate(from), lte: toDate(to) };
     const [punches, declared] = await Promise.all([
-      this.prisma.timeMorphoRecord.findMany({
-        where: { EmployeeId: employeeIds ? { in: employeeIds } : { not: null }, DateJour: range },
-        select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
-      }),
+      this.loadPunchSpans(from, to, employeeIds),
       this.prisma.timeManualEntry.findMany({
         where: {
           Status: 'Approved',
@@ -276,12 +324,7 @@ export class TimeCalculationService {
       }),
     ]);
     const records = buildWorkRecords(
-      punches.map((p) => ({
-        employeeId: p.EmployeeId!,
-        dateKey: dateKey(p.DateJour),
-        firstClock: p.PremierPointage,
-        lastClock: p.DernierPointage,
-      })),
+      punches.map((p) => ({ employeeId: p.employeeId, dateKey: p.dateKey, firstClock: p.first, lastClock: p.last })),
       declared.map((d) => ({
         employeeId: d.EmployeeId,
         dateKey: dateKey(d.Date),
@@ -317,8 +360,9 @@ export class TimeCalculationService {
         if (d.date < from || d.date > to) continue;
         const key = `${week.EmployeeId}|${d.date}`;
         frozenMinutes.set(key, d.travelMinutes ?? 0);
-        if (d.punches.length || d.extraHours) records.set(key, recordFromPunches(week.EmployeeId, d.date, d.punches, d.extraHours));
-        else records.delete(key);
+        if (d.punches.length || d.extraHours) {
+          records.set(key, { ...recordFromPunches(week.EmployeeId, d.date, d.punches, d.extraHours), pause: d.pause ?? null });
+        } else records.delete(key);
       }
     }
     if (records.size === 0) return records;
@@ -422,7 +466,7 @@ export class TimeCalculationService {
         clocks,
         this.holidaysFor(employee, holidayRows, ancestors),
         (_e, key) => schedule.required[dow(key)] ?? null,
-        (_e, key) => schedule.breakHours[dow(key)] ?? 0,
+        (_e, key) => schedule.breaks[dow(key)] ?? null,
         { deductBreak, includeNonWorkingDays },
       );
       days.push(...result.days);

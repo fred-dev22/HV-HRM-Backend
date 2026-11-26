@@ -1,5 +1,5 @@
 -- GRT : script de migration unique (a jouer apres 01-schema.sql et 02-seed.sql, avant de demarrer
--- le nouveau backend). Il regroupe dix evolutions, dans cet ordre :
+-- le nouveau backend). Il regroupe onze evolutions, dans cet ordre :
 --   1) Messagerie : table MailSettings (configuration des emails dans l'application, Graph ou SMTP).
 --   2) Regime de conge annuel : Employee.LeaveRegime (Calendar | Working) et
 --      LeaveType.AppliesToLeaveRegime, pour les deux types de conge annuel (32 j calendaires,
@@ -13,6 +13,8 @@
 --   8) Validation hebdomadaire : corrections de jours, controle et validation des semaines.
 --   9) Sites de travail : table TimeSite, Employee.TimeSiteId, sites Siege, Zone A et Zone B.
 --  10) Alerte heures supplementaires : table TimeOvertimeAlert, seuils d'alerte et legal a 20 h.
+--  11) Calendriers : suppression de la contrainte d'unicite qui empechait tout calendrier propre
+--      a un employe ; libelle du reglage de pause (sa valeur n'est pas modifiee).
 -- Chaque partie est transactionnelle et rejouable. Rejouer le fichier remet les reglages des parties
 -- 4, 6 et 10 a leur valeur ci-dessous, meme s'ils ont ete changes depuis dans l'application.
 -- Donnees : reglages du temps de travail et, s'il n'existe aucun site, les trois sites du client. Aucun solde, employe ou type de conge n'est touche.
@@ -441,6 +443,41 @@ IF NOT EXISTS (SELECT 1 FROM dbo.TimeSetting WHERE [Key] = N'overtime_legal_cap_
 
 COMMIT TRAN;
 PRINT N'Script (alerte heures supplementaires) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO
+
+GO
+-- Calendrier propre a un employe. La contrainte unique sur Calendar.EmployeeCategoryId
+-- n'accepte sous SQL Server qu'UNE ligne sans categorie : celle du calendrier global.
+-- Tout calendrier d'employe etait donc refuse. L'unicite par categorie est desormais
+-- verifiee par le backend, comme l'unicite par employe.
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+BEGIN TRY
+
+BEGIN TRAN;
+
+IF EXISTS (SELECT 1 FROM sys.key_constraints
+           WHERE [name] = N'Calendar_EmployeeCategoryId_key' AND parent_object_id = OBJECT_ID(N'dbo.Calendar'))
+    ALTER TABLE [dbo].[Calendar] DROP CONSTRAINT [Calendar_EmployeeCategoryId_key];
+IF EXISTS (SELECT 1 FROM sys.indexes
+           WHERE [name] = N'Calendar_EmployeeCategoryId_key' AND object_id = OBJECT_ID(N'dbo.Calendar'))
+    DROP INDEX [Calendar_EmployeeCategoryId_key] ON [dbo].[Calendar];
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+               WHERE [name] = N'Calendar_EmployeeCategoryId_idx' AND object_id = OBJECT_ID(N'dbo.Calendar'))
+    CREATE NONCLUSTERED INDEX [Calendar_EmployeeCategoryId_idx] ON [dbo].[Calendar]([EmployeeCategoryId]);
+
+UPDATE dbo.TimeSetting SET [Label] = N'Retirer la pause quand les pointages la couvrent (1 = oui)'
+WHERE [Key] = N'deduct_break';
+
+COMMIT TRAN;
+PRINT N'Script (calendriers par employe) applique.';
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;

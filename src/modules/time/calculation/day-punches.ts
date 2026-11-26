@@ -96,6 +96,8 @@ export interface FrozenDay {
   permanence: boolean;
   // Minutes de trajet du site au moment de la validation.
   travelMinutes?: number;
+  // Pause retiree au moment de la validation ; absente ou null : aucune.
+  pause?: { start: string; end: string; nextDay?: boolean } | null;
 }
 
 export function parseJson<T>(value: string | null | undefined, fallback: T): T {

@@ -26,8 +26,9 @@ const entry = (dateKey: string, from: string, to: string, employeeId = 'E1') => 
 const day = (dateKey: string, workedHours: number, employeeId = 'E1'): DayHours => ({ employeeId, dateKey, workedHours, requiredHours: 8 });
 const recordOf = (punches: ReturnType<typeof punch>[], entries: Parameters<typeof buildWorkRecords>[1]) =>
   [...buildWorkRecords(punches, entries).values()][0]!;
+const lunch = { start: '12:00', end: '13:00' };
 const hoursOf = (punches: ReturnType<typeof punch>[], entries: Parameters<typeof buildWorkRecords>[1], options = {}) =>
-  computeDailyHours([recordOf(punches, entries)], new Set(), () => 8, () => 1, options).days[0]!.workedHours;
+  computeDailyHours([recordOf(punches, entries)], new Set(), () => 8, () => lunch, options).days[0]!.workedHours;
 
 describe('saisies approuvees et pointeuse reunies', () => {
   it('une saisie seule compte comme temps travaille', () => {
@@ -47,9 +48,34 @@ describe('saisies approuvees et pointeuse reunies', () => {
     expect(hoursOf([punch(MON, '00:00', '20:00')], [{ employeeId: 'E1', dateKey: MON, start: null, end: null, hours: 10 }])).toBe(24);
   });
 
-  it('le trou entre deux plages n est pas retire une seconde fois comme pause', () => {
-    expect(hoursOf([], [entry(MON, '07:00', '12:00'), entry(MON, '13:00', '17:00')], { deductBreak: true })).toBe(9);
+  it('la pause n est retiree que si une presence la couvre en entier', () => {
     expect(hoursOf([punch(MON, '07:00', '17:00')], [], { deductBreak: true })).toBe(9);
+    // Le trou entre deux plages est deja la pause : rien a retirer.
+    expect(hoursOf([], [entry(MON, '07:00', '12:00'), entry(MON, '13:00', '17:00')], { deductBreak: true })).toBe(9);
+    // Couverte en partie seulement : comptee comme pointee.
+    expect(hoursOf([punch(MON, '07:00', '12:30')], [], { deductBreak: true })).toBe(5.5);
+    expect(hoursOf([punch(MON, '12:30', '17:00')], [], { deductBreak: true })).toBe(4.5);
+    // Matinee seule : aucune pause a retirer.
+    expect(hoursOf([punch(MON, '07:00', '11:00')], [], { deductBreak: true })).toBe(4);
+    // Deux plages qui se rejoignent couvrent la pause.
+    expect(hoursOf([punch(MON, '07:00', '12:30')], [entry(MON, '12:30', '17:00')], { deductBreak: true })).toBe(9);
+  });
+
+  it('sans reglage, sans pause a l horaire ou un jour ferie, rien n est retire', () => {
+    const records = [recordOf([punch(MON, '07:00', '17:00')], [])];
+    expect(computeDailyHours(records, new Set(), () => 8, () => lunch).days[0]!.workedHours).toBe(10);
+    expect(computeDailyHours(records, new Set(), () => 8, () => null, { deductBreak: true }).days[0]!.workedHours).toBe(10);
+    expect(computeDailyHours(records, new Set([MON]), () => 8, () => lunch, { deductBreak: true }).days[0]!.workedHours).toBe(10);
+  });
+
+  it('une semaine validee garde la pause appliquee a la validation', () => {
+    const record = recordOf([punch(MON, '07:00', '17:00')], []);
+    const hours = (pause: { start: string; end: string } | null, deductBreak: boolean) =>
+      computeDailyHours([{ ...record, pause }], new Set(), () => 8, () => lunch, { deductBreak }).days[0]!.workedHours;
+    // Reglage active apres coup : la semaine deja validee ne bouge pas.
+    expect(hours(null, true)).toBe(10);
+    // Reglage desactive ou horaire modifie apres coup : la pause figee reste retiree.
+    expect(hours({ start: '12:00', end: '12:30' }, false)).toBe(9.5);
   });
 
   it('un jour non prevu avec saisie approuvee compte toujours', () => {

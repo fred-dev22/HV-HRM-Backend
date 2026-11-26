@@ -12,7 +12,8 @@ export const isWorkType = (entryType: string) => WORK_ENTRY_TYPES.includes(entry
 // Une saisie de travail avec l'entree OU la sortie seulement : a completer.
 export const isIncomplete = (entryType: string, start: unknown, end: unknown) => isWorkType(entryType) && !!start !== !!end;
 
-// Horaires d'une saisie, en minutes depuis minuit.
+// Horaires d'une saisie, en minutes depuis le debut de son jour : la sortie d'un
+// poste de nuit depasse 24 h.
 export interface Slot {
   entryType: string;
   start: number | null;
@@ -21,8 +22,15 @@ export interface Slot {
 }
 
 export const minutesOf = (value: Date | null): number | null => (value ? value.getHours() * 60 + value.getMinutes() : null);
+export function exitMinutes(start: Date | null, end: Date | null): number | null {
+  const minutes = minutesOf(end);
+  if (minutes === null || !start || !end) return minutes;
+  return end.getDate() === start.getDate() ? minutes : minutes + 24 * 60;
+}
 const label = (minutes: number | null) =>
-  minutes === null ? '?' : `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  minutes === null ? '?' : `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+const frDay = (dateKey: string) => `${dateKey.slice(8, 10)}/${dateKey.slice(5, 7)}`;
+const dayAfter = (dateKey: string) => new Date(new Date(`${dateKey}T00:00:00Z`).getTime() + 86_400_000).toISOString().slice(0, 10);
 export const slotLabel = (s: Slot) =>
   s.start === null && s.end === null ? `${String(s.hours).replace('.', ',')} h` : `${label(s.start)}-${label(s.end)}`;
 
@@ -46,6 +54,17 @@ export function overlaps(a: Slot, b: Slot): boolean {
   // dans une seule saisie) ; deux entrees differentes sont deux periodes.
   if ((a.start !== null) !== (b.start !== null)) return true;
   return a.start === b.start && a.end === b.end;
+}
+
+// Chevauchement de deux saisies qui peuvent etre de jours differents : seul un
+// poste qui passe minuit peut toucher celles du lendemain.
+export function overlapsAcross(a: Slot, aDate: string, b: Slot, bDate: string): boolean {
+  if (aDate === bDate) return overlaps(a, b);
+  const [first, firstDate, second, secondDate] = aDate < bDate ? [a, aDate, b, bDate] : [b, bDate, a, aDate];
+  if (secondDate !== dayAfter(firstDate) || first.start === null || first.end === null || first.end <= 24 * 60) return false;
+  if (second.start === null && second.end === null) return false;
+  const later = (minutes: number | null) => (minutes === null ? null : minutes + 24 * 60);
+  return overlaps(first, { ...second, start: later(second.start), end: later(second.end) });
 }
 
 export interface LineEmployee {
@@ -99,7 +118,7 @@ export function planLines(input: {
   lockedDays?: Set<string>;
   today: string;
 }): LineResult[] {
-  const accepted: { index: number; key: string; slot: Slot }[] = [];
+  const accepted: { index: number; employeeId: string; dateKey: string; slot: Slot }[] = [];
   const replaced = new Set<string>();
 
   return input.lines.map((line, index) => {
@@ -124,38 +143,51 @@ export function planLines(input: {
     const once = isOncePerDay(slot.entryType);
     const sameFamily = (other: Slot) => (once ? other.entryType === slot.entryType : isWorkType(other.entryType));
 
-    const previous = accepted.find((a) => a.key === key && sameFamily(a.slot) && (once || overlaps(a.slot, slot)));
+    // Un panier ou une permanence se compare au meme jour ; une periode aussi a la
+    // nuit de la veille et au lendemain d'une nuit.
+    const touches = (other: Slot, otherDate: string) =>
+      once ? otherDate === dateKey : overlapsAcross(slot, dateKey, other, otherDate);
+    const previous = accepted.find((a) => a.employeeId === employee.id && sameFamily(a.slot) && touches(a.slot, a.dateKey));
     if (previous) {
-      return once || isSameSlot(previous.slot, slot)
+      return once || (previous.dateKey === dateKey && isSameSlot(previous.slot, slot))
         ? result('skip', `Même saisie qu'à la ligne ${previous.index + 1}`)
         : result('error', `Chevauche la ligne ${previous.index + 1} du même envoi`);
     }
 
     const warnings: string[] = [];
     if (input.leaveDays.has(key)) warnings.push('Employé en congé approuvé ce jour');
-    const punch = input.punches.find((p) => p.employeeId === employee.id && p.dateKey === dateKey);
-    if (punch && isWorkType(slot.entryType) && overlaps({ ...slot, start: punch.start, end: punch.end }, slot)) {
+    if (slot.end !== null && slot.end > 24 * 60) warnings.push(`Sortie le lendemain (${String(slot.hours).replace('.', ',')} h)`);
+    const punch = isWorkType(slot.entryType)
+      ? input.punches.find(
+          (p) => p.employeeId === employee.id && overlapsAcross(slot, dateKey, { ...slot, start: p.start, end: p.end }, p.dateKey),
+        )
+      : undefined;
+    if (punch) {
       warnings.push(`Chevauche la pointeuse (${label(punch.start)}-${label(punch.end)}) : les heures communes ne comptent qu'une fois`);
     }
     const accept = (action: 'create' | 'replace', replaceIds: string[] = []) => {
-      accepted.push({ index, key, slot });
+      accepted.push({ index, employeeId: employee.id, dateKey, slot });
       replaceIds.forEach((id) => replaced.add(id));
       return result(action, undefined, { warnings, replaceIds });
     };
 
     const clashes = input.existing.filter(
-      (e) => e.employeeId === employee.id && e.dateKey === dateKey && !replaced.has(e.id) && sameFamily(e) && (once || overlaps(e, slot)),
+      (e) => e.employeeId === employee.id && !replaced.has(e.id) && sameFamily(e) && touches(e, e.dateKey),
     );
     if (clashes.length === 0) return accept('create');
     if (once) return result('skip', 'Déjà déclaré ce jour', { warnings });
-    if (clashes.some((c) => isSameSlot(c, slot))) return result('skip', 'Déjà saisie', { warnings });
+    if (clashes.some((c) => c.dateKey === dateKey && isSameSlot(c, slot))) return result('skip', 'Déjà saisie', { warnings });
 
-    const canReplace = clashes.every((c) => c.status === 'Pending');
+    // Une saisie d'un autre jour ne se remplace pas depuis cette ligne.
+    const otherDay = clashes.some((c) => c.dateKey !== dateKey);
+    const approved = clashes.some((c) => c.status === 'Approved');
+    const canReplace = !approved && !otherDay;
     const described = clashes
-      .map((c) => `${slotLabel(c)} (${c.status === 'Approved' ? 'approuvée' : 'en attente'})`)
+      .map((c) => `${slotLabel(c)}${c.dateKey === dateKey ? '' : ` du ${frDay(c.dateKey)}`} (${c.status === 'Approved' ? 'approuvée' : 'en attente'})`)
       .join(', ');
+    const why = approved ? '. Une saisie approuvée ne se remplace pas' : otherDay ? ". Une saisie d'un autre jour ne se remplace pas ici" : '';
     if (line.onConflict === 'skip') return result('skip', `Saisie existante gardée : ${described}`, { warnings });
     if (line.onConflict === 'replace' && canReplace) return accept('replace', clashes.map((c) => c.id));
-    return result('conflict', `Chevauche : ${described}${canReplace ? '' : '. Une saisie approuvée ne se remplace pas'}`, { warnings, canReplace });
+    return result('conflict', `Chevauche : ${described}${why}`, { warnings, canReplace });
   });
 }

@@ -40,7 +40,7 @@ describe('TimeEntryService.createBatch', () => {
     };
     const notifications = { create: jest.fn() };
     const pools = { findApplicablePool: jest.fn().mockResolvedValue(null) };
-    const calculation = { holidayKeysByEmployee: jest.fn().mockResolvedValue(new Map()) };
+    const calculation = { holidayKeysByEmployee: jest.fn().mockResolvedValue(new Map()), loadPunchSpans: jest.fn().mockResolvedValue([]) };
     const service = new TimeEntryService(prisma as never, pools as never, notifications as never, calculation as never);
     return { service, prisma, created, notifications };
   }
@@ -102,7 +102,7 @@ describe('TimeEntryService.createBatch : journees deja declarees', () => {
       timeWeekValidation: { findMany: jest.fn().mockResolvedValue([]) },
       timeManualEntry: { findMany: jest.fn().mockResolvedValue([{ EmployeeId: 'a', Date: day('2026-11-02') }]) },
     };
-    const calculation = { holidayKeysByEmployee: jest.fn().mockResolvedValue(new Map()) };
+    const calculation = { holidayKeysByEmployee: jest.fn().mockResolvedValue(new Map()), loadPunchSpans: jest.fn().mockResolvedValue([]) };
     return new TimeEntryService(prisma as never, {} as never, {} as never, calculation as never);
   };
   const dto = (EntryType: 'mission' | 'panier') => ({

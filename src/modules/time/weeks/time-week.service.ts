@@ -45,7 +45,13 @@ export function isoWeekNumber(monday: string): number {
 
 export interface WeekDay {
   date: string;
+  // Heures prevues (« 8 h »), null un jour ferie ou non travaille.
   schedule: string | null;
+  // Horaire et pause du calendrier applique ce jour-la.
+  hours: string | null;
+  pause: string | null;
+  // La pause tombe apres minuit (poste de nuit).
+  pauseNextDay: boolean;
   holiday: boolean;
   leave: string | null;
   punches: (DayPunch & { pending: boolean })[];
@@ -70,6 +76,10 @@ export interface ComputedWeek {
   controlledAt: Date | null;
   validatedById: string | null;
   validatedAt: Date | null;
+  // Calendrier applique a l'employe (propre, de sa categorie ou global).
+  calendar: { name: string; source: Schedule['source'] } | null;
+  // Reglage "retirer la pause" au moment du calcul (fige avec la validation).
+  deductBreak: boolean;
   // Site de l'employe et minutes appliquees (figees si la semaine est validee).
   site: { name: string; minutes: number } | null;
   days: WeekDay[];
@@ -144,10 +154,7 @@ export class TimeWeekService {
         this.calculation.loadHolidayRows(monday, sunday),
         this.calculation.loadOrganizationAncestors(),
         this.calculation.loadWorkRecords(monday, sunday, employeeIds),
-        this.prisma.timeMorphoRecord.findMany({
-          where: { EmployeeId: ids, DateJour: range },
-          select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
-        }),
+        this.calculation.loadPunchSpans(monday, sunday, employeeIds),
         this.prisma.timeManualEntry.findMany({
           where: { EmployeeId: ids, Date: range, Status: { in: ['Pending', 'Approved'] } },
           select: {
@@ -188,7 +195,7 @@ export class TimeWeekService {
         own,
         holidays,
         (_e, key) => schedule?.required[weekday(key)] ?? null,
-        (_e, key) => schedule?.breakHours[weekday(key)] ?? 0,
+        (_e, key) => schedule?.breaks[weekday(key)] ?? null,
         options,
       );
       const byDate = new Map<string, DayHours>(days.map((d) => [d.dateKey, d]));
@@ -225,12 +232,13 @@ export class TimeWeekService {
         else if (correction?.Punches != null) list = parseJson<DayPunch[]>(correction.Punches, []);
         else {
           list = [];
-          const clockRows = punches.filter((p) => p.EmployeeId === id && keyOf(p.DateJour) === date);
-          if (clockRows.length) {
-            const first = clockRows.map((p) => p.PremierPointage).reduce((a, b) => (b < a ? b : a));
-            const last = clockRows.map((p) => p.DernierPointage).reduce((a, b) => (b > a ? b : a));
-            // Un seul passage a la pointeuse : la sortie manque.
-            list.push(punchFromDates(first, last.getTime() === first.getTime() ? null : last, date, 'Morpho'));
+          const span = punches.find((p) => p.employeeId === id && p.dateKey === date);
+          if (span) {
+            // Un seul passage a la pointeuse : la sortie manque, sauf poste de nuit sans entree.
+            const single = span.last.getTime() === span.first.getTime();
+            const first = span.missing === 'start' ? null : span.first;
+            const last = span.missing === 'start' ? span.last : single ? null : span.last;
+            list.push(punchFromDates(first, last, date, 'Morpho'));
           }
           for (const e of dayEntries) {
             if (e.Status === 'Approved' && WORK_ENTRY_TYPES.includes(e.EntryType ?? '') && (e.FirstClockIn || e.LastClockOut)) {
@@ -260,9 +268,15 @@ export class TimeWeekService {
         const week = schedule?.required[weekday(date)];
         const leave = leaves.find((l) => l.EmployeeId === id && keyOf(l.StartDate) <= date && keyOf(l.EndDate) >= date);
 
+        const planned = holidays.has(date) ? null : (schedule?.hours[weekday(date)] ?? null);
+        const rest = planned ? (schedule?.breaks[weekday(date)] ?? null) : null;
+
         return {
           date,
           schedule: holidays.has(date) || week == null ? null : `${round2(week)} h`,
+          hours: planned ? `${planned.start}-${planned.end}` : null,
+          pause: rest ? `${rest.start}-${rest.end}` : null,
+          pauseNextDay: !!rest?.nextDay,
           holiday: holidays.has(date),
           leave: leave?.leaveType?.Name ?? null,
           punches: [...sortPunches(list).map((p) => ({ ...p, pending: false })), ...waitingPunches],
@@ -302,6 +316,8 @@ export class TimeWeekService {
         controlledAt: validation?.ControlledAt ?? null,
         validatedById: validation?.ValidatedById ?? null,
         validatedAt: validation?.ValidatedAt ?? null,
+        calendar: schedule ? { name: schedule.name, source: schedule.source } : null,
+        deductBreak: options.deductBreak,
         site: ownSite ? { name: ownSite.Name, minutes: frozenMinutes ?? ownSite.DeductionMinutes } : null,
         days: weekDays,
         totals: {
@@ -416,6 +432,7 @@ export class TimeWeekService {
       ControlledAt: computed.controlledAt,
       ValidatedBy: nameOf(computed.validatedById),
       ValidatedAt: computed.validatedAt,
+      Calendar: computed.calendar,
       Site: computed.site,
       Days: computed.days,
       Totals: computed.totals,
@@ -528,6 +545,10 @@ export class TimeWeekService {
       panier: d.panier,
       permanence: d.permanence,
       travelMinutes: week.site?.minutes ?? 0,
+      pause:
+        week.deductBreak && d.pause
+          ? { start: d.pause.slice(0, 5), end: d.pause.slice(6), ...(d.pauseNextDay ? { nextDay: true } : {}) }
+          : null,
     }));
     const data = { Status: 'Validated', ValidatedById: me, ValidatedAt: new Date(), Snapshot: JSON.stringify(snapshot) };
     await this.setStatus(employeeId, monday, data, 'VALIDATE', me, week.status === 'Open' ? 'Validée sans contrôle préalable' : undefined);

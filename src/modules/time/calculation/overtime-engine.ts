@@ -97,6 +97,9 @@ export interface ClockRecord {
   // telles quelles (pour l'affichage) et duree retiree.
   badge?: Interval;
   travelHours?: number;
+  // Semaine validee : pause retiree a la validation (null : aucune). Elle prime
+  // sur le calendrier et le reglage du moment.
+  pause?: BreakWindow | null;
 }
 
 export const intervalsOf = (r: ClockRecord): Interval[] => r.intervals ?? [{ start: r.firstClock, end: r.lastClock }];
@@ -188,16 +191,45 @@ export function requiredHoursOfSchedule(day: {
     const [h, m] = t.split(':').map(Number);
     return h! * 60 + (m ?? 0);
   };
-  let minutes = toMinutes(day.endTime) - toMinutes(day.startTime);
-  if (day.breakStart && day.breakEnd) minutes -= toMinutes(day.breakEnd) - toMinutes(day.breakStart);
+  // Une fin avant le debut est un poste de nuit, il en va de meme pour la pause.
+  const span = (from: string, to: string) => (toMinutes(to) - toMinutes(from) + 1440) % 1440;
+  let minutes = span(day.startTime, day.endTime);
+  if (day.breakStart && day.breakEnd) minutes -= span(day.breakStart, day.breakEnd);
   return Math.round((minutes / 60) * 10) / 10;
 }
 
+export interface BreakWindow {
+  start: string; // HH:mm
+  end: string;
+  // Poste de nuit : la pause commence apres minuit.
+  nextDay?: boolean;
+}
+
+// Debut et fin reels de la pause d'un jour.
+export function breakBounds(dateKey: string, window: BreakWindow): { start: Date; end: Date } {
+  const at = (time: string, days: number) => {
+    const date = new Date(`${dateKey}T${time}:00`);
+    date.setDate(date.getDate() + days);
+    return date;
+  };
+  const offset = window.nextDay ? 1 : 0;
+  const start = at(window.start, offset);
+  const sameDay = at(window.end, offset);
+  return { start, end: sameDay > start ? sameDay : at(window.end, offset + 1) };
+}
+
+// Une seule plage de presence couvre toute la pause de l'horaire. Sortir et
+// repointer pendant la pause laisse un trou, deja non compte.
+export function coversBreak(record: ClockRecord, window: BreakWindow): boolean {
+  const { start, end } = breakBounds(record.dateKey, window);
+  return intervalsOf(record).some((i) => i.start <= start && i.end >= end);
+}
+
 export interface DailyHoursOptions {
-  // Duree de pause (heures) a retirer du temps travaille quand la journee
-  // couvre la pause. Le systeme Pointage ne la retire pas (le temps travaille
-  // est dernier - premier pointage) : defaut false pour rester identique tant
-  // que le client n'a pas valide la correction.
+  // Retire la pause de l'horaire du jour quand les pointages la couvrent en
+  // entier. Le systeme Pointage ne la retire pas (le temps travaille est
+  // dernier - premier pointage) : defaut false tant que le client n'a pas
+  // valide la correction.
   deductBreak?: boolean;
   // Jour sans horaire (dimanche, jour non travaille) mais pointe : le systeme
   // Pointage l'ignore, donc perd les heures du dimanche (HS10). Vrai = on le
@@ -212,7 +244,7 @@ export function computeDailyHours(
   records: ClockRecord[],
   holidays: Set<string>,
   requiredFor: (employeeId: string, dateKey: string) => number | null,
-  breakHoursFor?: (employeeId: string, dateKey: string) => number,
+  breakFor?: (employeeId: string, dateKey: string) => BreakWindow | null,
   options: DailyHoursOptions = {},
 ): { days: DayHours[]; skipped: number } {
   const days: DayHours[] = [];
@@ -226,12 +258,10 @@ export function computeDailyHours(
     }
     const intervals = intervalsOf(r);
     let worked = intervals.reduce((sum, i) => sum + hoursBetween(i), 0);
-    if (options.deductBreak && breakHoursFor) {
-      // Un trou entre deux plages est deja une pause : on ne la retire pas deux fois.
-      const span = intervals.length ? hoursBetween({ start: r.firstClock, end: r.lastClock }) : 0;
-      const pause = Math.max(0, breakHoursFor(r.employeeId, r.dateKey) - Math.max(0, span - worked));
-      if (worked > pause) worked -= pause;
-    }
+    // Un jour ferie n'a pas d'horaire : aucune pause n'y est supposee.
+    const current = options.deductBreak && breakFor && !holidays.has(r.dateKey) ? breakFor(r.employeeId, r.dateKey) : null;
+    const pause = r.pause === undefined ? current : r.pause;
+    if (pause && coversBreak(r, pause)) worked -= hoursBetween(breakBounds(r.dateKey, pause));
     worked = Math.min(24, worked + (r.extraHours ?? 0));
     days.push({ employeeId: r.employeeId, dateKey: r.dateKey, workedHours: worked, requiredHours: required });
   }
@@ -478,12 +508,11 @@ export function computeOvertimeLines(input: OvertimeInput): OvertimeLine[] {
 // ne donne que le premier et le dernier pointage : la pause de l'horaire est
 // consideree prise quand sa plage la couvre entierement. Un employe en service
 // continu doit donc avoir un horaire sans pause.
-export function longestContinuousHours(record: ClockRecord, breakWindow?: { start: string; end: string } | null): number {
+export function longestContinuousHours(record: ClockRecord, breakWindow?: BreakWindow | null): number {
   const sourced = record.punch !== undefined || record.declaredIntervals !== undefined;
   let punched = sourced ? (record.punch ? [record.punch] : []) : intervalsOf(record);
   if (breakWindow) {
-    const start = new Date(`${record.dateKey}T${breakWindow.start}:00`);
-    const end = new Date(`${record.dateKey}T${breakWindow.end}:00`);
+    const { start, end } = breakBounds(record.dateKey, breakWindow);
     punched = punched.flatMap((i) =>
       i.start <= start && i.end >= end ? [{ start: i.start, end: start }, { start: end, end: i.end }] : [i],
     );

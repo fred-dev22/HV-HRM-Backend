@@ -28,8 +28,16 @@ describe('resolveTimes', () => {
     expect(() => resolveTimes('2026-11-02', 4, '08:00', undefined)).toThrow(BadRequestException);
   });
 
-  it('refuse une fin avant le debut', () => {
-    expect(() => resolveTimes('2026-11-02', undefined, '18:00', '08:00')).toThrow(BadRequestException);
-    expect(() => resolveTimes('2026-11-02', undefined, '08:00', '08:00')).toThrow(BadRequestException);
+  it('une fin avant le debut est un poste de nuit : la sortie a lieu le lendemain', () => {
+    const r = resolveTimes('2026-11-30', undefined, '22:00', '06:00');
+    expect(r.hours).toBe(8);
+    expect(r.clockIn).toEqual(new Date('2026-11-30T22:00:00'));
+    expect(r.clockOut).toEqual(new Date('2026-12-01T06:00:00'));
+    expect(resolveTimes('2026-11-02', undefined, '18:00', '10:00').hours).toBe(16);
+  });
+
+  it('refuse une fin egale au debut et une nuit de plus de 16 h', () => {
+    expect(() => resolveTimes('2026-11-02', undefined, '08:00', '08:00')).toThrow('différente');
+    expect(() => resolveTimes('2026-11-02', undefined, '13:00', '12:00')).toThrow('16 h');
   });
 });

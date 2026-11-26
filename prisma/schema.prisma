@@ -720,20 +720,19 @@ model Calendar {
   Name      String  @db.NVarChar(100)
   IsDefault Boolean @default(false)
 
-  // Nullable : calendrier global (portee par defaut) quand absent. Unique
-  // sur un champ nullable — MSSQL autorise plusieurs NULL, une seule ligne
-  // par categorie precise (voir decision du 04/08 : calendrier par
-  // categorie uniquement, pas de surcharge par employe individuel).
-  EmployeeCategoryId String? @unique @db.UniqueIdentifier
+  // Nullable : absent pour le calendrier global et ceux des employes. Pas de
+  // @unique : sous SQL Server une contrainte unique n'accepte qu'un seul NULL,
+  // ce qui interdisait tout calendrier d'employe a cote du global. Un seul
+  // calendrier par categorie : verifie par CalendarService.
+  EmployeeCategoryId String? @db.UniqueIdentifier
 
   // Calendrier propre a UN employe (module Temps de travail : le systeme
   // Pointage resout employe > groupe > global, et le client l'utilise). Un
   // calendrier est soit global, soit de categorie, soit d'employe, jamais deux
   // a la fois (verifie par CalendarService). Resolution : employe > categorie
   // > global. Les conges gardent leur resolution categorie > global.
-  // Pas de @unique : sous SQL Server une contrainte unique n'accepte qu'un seul
-  // NULL, ce que tous les calendriers global/categorie violeraient. L'unicite par
-  // employe est verifiee par CalendarService.
+  // Pas de @unique non plus (meme raison) : un seul calendrier par employe,
+  // verifie par CalendarService.
   EmployeeId String? @db.UniqueIdentifier
 
   CreatedBy  String    @db.UniqueIdentifier
@@ -748,6 +747,7 @@ model Calendar {
 
   workDays CalendarWorkDay[]
 
+  @@index([EmployeeCategoryId])
   @@index([EmployeeId])
 }
 

@@ -20,14 +20,16 @@ import {
   isIncomplete,
   isOncePerDay,
   isWorkType,
+  exitMinutes,
   minutesOf,
-  overlaps,
+  overlapsAcross,
   planLines,
   slotLabel,
 } from './entry-lines';
 import { WORK_ENTRY_TYPES } from '../calculation/work-records';
 import { assertWeekOpen, removeControl, validatedWeeks, weekKey } from '../weeks/week-lock';
 import { TimeCalculationService } from '../calculation/time-calculation.service';
+import { NIGHT_SHIFT_MAX_HOURS } from '../../calendar/calendar-hours';
 import {
   AdjustTimeEntryDto,
   CreateTimeEntryBatchDto,
@@ -50,6 +52,7 @@ const INCLUDE = {
 const toDate = (key: string) => new Date(`${key.slice(0, 10)}T00:00:00Z`);
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const keyOf = (d: Date) => d.toISOString().slice(0, 10);
+const shiftDays = (key: string, days: number) => new Date(toDate(key).getTime() + days * 86_400_000);
 
 // Duree et horodatages d'une saisie. Avec heure de debut et de fin, la duree
 // s'en deduit ; sinon la duree declaree est obligatoire. Les horodatages sont
@@ -70,12 +73,20 @@ export function resolveTimes(dateKey: string, hours: number | undefined, start?:
   }
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
-  const minutes = eh! * 60 + em! - (sh! * 60 + sm!);
-  if (minutes <= 0) throw new BadRequestException("L'heure de fin doit être après l'heure de début");
+  let minutes = eh! * 60 + em! - (sh! * 60 + sm!);
+  if (minutes === 0) throw new BadRequestException("L'heure de fin doit être différente de l'heure de début");
+  // Fin avant le debut : poste de nuit, la sortie a lieu le lendemain.
+  const overnight = minutes < 0;
+  if (overnight) minutes += 24 * 60;
+  if (overnight && minutes > NIGHT_SHIFT_MAX_HOURS * 60) {
+    throw new BadRequestException(`Un poste de nuit ne dépasse pas ${NIGHT_SHIFT_MAX_HOURS} h : vérifiez les heures de début et de fin`);
+  }
+  const clockOut = new Date(`${dateKey}T${end}:00`);
+  if (overnight) clockOut.setDate(clockOut.getDate() + 1);
   return {
     hours: Math.round((minutes / 60) * 100) / 100,
     clockIn: new Date(`${dateKey}T${start}:00`),
-    clockOut: new Date(`${dateKey}T${end}:00`),
+    clockOut,
   };
 }
 
@@ -83,13 +94,13 @@ export function resolveTimes(dateKey: string, hours: number | undefined, start?:
 const slotFrom = (entryType: string, times: ReturnType<typeof resolveTimes>): Slot => ({
   entryType,
   start: minutesOf(times.clockIn),
-  end: minutesOf(times.clockOut),
+  end: exitMinutes(times.clockIn, times.clockOut),
   hours: times.hours,
 });
 const toSlot = (e: { EntryType: string | null; FirstClockIn: Date | null; LastClockOut: Date | null; Hours: unknown }): Slot => ({
   entryType: e.EntryType ?? '',
   start: minutesOf(e.FirstClockIn),
-  end: minutesOf(e.LastClockOut),
+  end: exitMinutes(e.FirstClockIn, e.LastClockOut),
   hours: Number(e.Hours),
 });
 
@@ -131,7 +142,7 @@ const fmtHours = (h: number) => `${String(h).replace('.', ',')} h`;
 // Texte d'historique d'un ajustement : ancienne et nouvelle duree, plage horaire
 // et motif eventuel. Tient dans les 500 caracteres de la colonne.
 export function describeAdjustment(before: number, after: number, start?: string, end?: string, reason?: string): string {
-  const range = start && end ? ` (${start} à ${end})` : '';
+  const range = start && end ? ` (${start} à ${end}${end < start ? ' le lendemain' : ''})` : '';
   const why = reason && reason.trim() ? ` : ${reason.trim()}` : '';
   return `Durée ${fmtHours(before)} → ${fmtHours(after)}${range}${why}`.slice(0, 500);
 }
@@ -335,21 +346,22 @@ export class TimeEntryService {
   // Une saisie de travail ne peut pas en chevaucher une autre du meme jour.
   private async assertNoOverlap(employeeId: string, dateKey: string, slot: Slot, exceptId?: string) {
     if (!isWorkType(slot.entryType)) return;
+    // La veille et le lendemain aussi : un poste de nuit deborde sur le jour suivant.
     const others = await this.prisma.timeManualEntry.findMany({
       where: {
         EmployeeId: employeeId,
-        Date: toDate(dateKey),
+        Date: { gte: shiftDays(dateKey, -1), lte: shiftDays(dateKey, 1) },
         EntryType: { in: WORK_ENTRY_TYPES },
         Status: { in: ['Pending', 'Approved'] },
         ...(exceptId ? { Id: { not: exceptId } } : {}),
       },
-      select: { EntryType: true, FirstClockIn: true, LastClockOut: true, Hours: true },
+      select: { Date: true, EntryType: true, FirstClockIn: true, LastClockOut: true, Hours: true },
     });
-    const clash = (others ?? []).map(toSlot).find((o) => overlaps(o, slot));
+    const clash = (others ?? []).find((o) => overlapsAcross(slot, dateKey, toSlot(o), keyOf(o.Date)));
     if (clash) {
-      throw new BadRequestException(
-        `Chevauche une saisie existante de ce jour (${slotLabel(clash)}) : modifiez-la ou annulez-la`,
-      );
+      const day = keyOf(clash.Date);
+      const which = day === dateKey ? 'une saisie existante de ce jour' : `la saisie du ${frDate(day)}`;
+      throw new BadRequestException(`Chevauche ${which} (${slotLabel(toSlot(clash))}) : modifiez-la ou annulez-la`);
     }
   }
 
@@ -627,16 +639,16 @@ export class TimeEntryService {
     const dates = lines.map((l) => l.dateKey).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
     const from = dates[0] ?? todayKey();
     const to = dates[dates.length - 1] ?? from;
-    const range = { gte: toDate(from), lte: toDate(to) };
+    // Un jour de plus de chaque cote : les postes de nuit passent minuit.
+    const before = keyOf(shiftDays(from, -1));
+    const after = keyOf(shiftDays(to, 1));
+    const range = { gte: toDate(before), lte: toDate(after) };
     const [existing, punches, leaves] = await Promise.all([
       this.prisma.timeManualEntry.findMany({
         where: { EmployeeId: { in: employeeIds }, Status: { in: ['Pending', 'Approved'] }, Date: range },
         select: { Id: true, EmployeeId: true, Date: true, EntryType: true, Status: true, FirstClockIn: true, LastClockOut: true, Hours: true },
       }),
-      this.prisma.timeMorphoRecord.findMany({
-        where: { EmployeeId: { in: employeeIds }, DateJour: range },
-        select: { EmployeeId: true, DateJour: true, PremierPointage: true, DernierPointage: true },
-      }),
+      this.calculation.loadPunchSpans(before, after, employeeIds),
       this.prisma.leaveRequest.findMany({
         where: {
           EmployeeId: { in: employeeIds },
@@ -673,12 +685,15 @@ export class TimeEntryService {
           status: e.Status as ExistingEntry['status'],
         }),
       ),
-      punches: punches.map((p) => ({
-        employeeId: p.EmployeeId!,
-        dateKey: keyOf(p.DateJour),
-        start: minutesOf(p.PremierPointage)!,
-        end: minutesOf(p.DernierPointage)!,
-      })),
+      // Un passage manquant n'avertit pas.
+      punches: punches
+        .filter((p) => !p.missing)
+        .map((p) => ({
+          employeeId: p.employeeId,
+          dateKey: p.dateKey,
+          start: minutesOf(p.first)!,
+          end: exitMinutes(p.first, p.last)!,
+        })),
     });
     if (dto.DryRun) return this.linesReport(lines, results, scope, true);
 

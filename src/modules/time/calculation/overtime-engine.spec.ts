@@ -104,8 +104,9 @@ describe('computeDailyHours', () => {
 
   it('ne retire la pause que sur demande', () => {
     const records = [rec(MON, [8, 0], [17, 0])];
-    const without = computeDailyHours(records, new Set(), () => 8, () => 1);
-    const withBreak = computeDailyHours(records, new Set(), () => 8, () => 1, { deductBreak: true });
+    const lunch = () => ({ start: '12:00', end: '13:00' });
+    const without = computeDailyHours(records, new Set(), () => 8, lunch);
+    const withBreak = computeDailyHours(records, new Set(), () => 8, lunch, { deductBreak: true });
     expect(without.days[0]!.workedHours).toBe(9);
     expect(withBreak.days[0]!.workedHours).toBe(8);
   });

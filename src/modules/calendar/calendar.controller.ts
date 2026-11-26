@@ -12,6 +12,7 @@ import { CalendarService } from './calendar.service';
 import { CreateCalendarDto } from './dto/create-calendar.dto';
 import { UpdateCalendarDto } from './dto/update-calendar.dto';
 import { ImportCalendarScheduleDto } from './dto/import-calendar-schedule.dto';
+import { ApplyCalendarToEmployeesDto } from './dto/apply-calendar-to-employees.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
 
@@ -31,6 +32,12 @@ export class CalendarController {
   @RequirePermission('CONFIG_CALENDRIER')
   importSchedule(@Body() dto: ImportCalendarScheduleDto, @CurrentUser('employeeId') employeeId: string) {
     return this.service.importSchedule(dto, employeeId);
+  }
+
+  @Post('employees')
+  @RequirePermission('CONFIG_CALENDRIER')
+  applyToEmployees(@Body() dto: ApplyCalendarToEmployeesDto, @CurrentUser('employeeId') employeeId: string) {
+    return this.service.applyToEmployees(dto, employeeId);
   }
 
   @Get()

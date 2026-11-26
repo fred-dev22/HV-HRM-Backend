@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { ExistingEntry, LineEmployee, PlannedLine, Slot, overlaps, planLines } from './entry-lines';
+import { ExistingEntry, LineEmployee, PlannedLine, Slot, exitMinutes, overlaps, overlapsAcross, planLines, slotLabel } from './entry-lines';
 import { TimeEntryService } from './time-entry.service';
 
 const DAY = '2026-11-16';
@@ -95,6 +95,54 @@ describe('saisies par lignes', () => {
   });
 });
 
+describe('postes de nuit', () => {
+  const NEXT = '2026-11-17';
+  // 22:00 au lendemain 06:00.
+  const night: Slot = { entryType: 'travail_sur_site', start: min('22:00'), end: 24 * 60 + min('06:00')!, hours: 8 };
+
+  it('la sortie du lendemain compte au-dela de 24 h et s affiche en heure du jour', () => {
+    expect(exitMinutes(new Date('2026-11-16T22:00:00'), new Date('2026-11-17T06:00:00'))).toBe(30 * 60);
+    expect(exitMinutes(new Date('2026-11-16T08:00:00'), new Date('2026-11-16T17:00:00'))).toBe(17 * 60);
+    expect(slotLabel(night)).toBe('22:00-06:00');
+  });
+
+  it('une nuit touche le matin du lendemain, dans les deux sens, mais pas la suite', () => {
+    expect(overlapsAcross(night, DAY, slot('05:00', '12:00'), NEXT)).toBe(true);
+    expect(overlapsAcross(slot('05:00', '12:00'), NEXT, night, DAY)).toBe(true);
+    expect(overlapsAcross(night, DAY, slot('06:00', '12:00'), NEXT)).toBe(false);
+    expect(overlapsAcross(night, DAY, night, NEXT)).toBe(false);
+    expect(overlapsAcross(night, DAY, slot('05:00', null), NEXT)).toBe(true);
+    // Une duree sans horaires du lendemain, ou une saisie de jour la veille : rien.
+    expect(overlapsAcross(night, DAY, slot(null, null, 'mission', 3), NEXT)).toBe(false);
+    expect(overlapsAcross(slot('08:00', '17:00'), DAY, slot('05:00', '12:00'), NEXT)).toBe(false);
+    expect(overlapsAcross(night, DAY, slot('05:00', '12:00'), '2026-11-18')).toBe(false);
+  });
+
+  it('des nuits qui se suivent sont toutes creees, avec la sortie du lendemain signalee', () => {
+    const results = plan([line(night), line(night, { dateKey: NEXT })]);
+    expect(results.map((r) => r.action)).toEqual(['create', 'create']);
+    expect(results[0]!.warnings).toEqual(['Sortie le lendemain (8 h)']);
+  });
+
+  it('une ligne du lendemain matin qui recouvre une nuit du meme envoi est refusee', () => {
+    const results = plan([line(night), line(slot('05:00', '12:00'), { dateKey: NEXT })]);
+    expect(results.map((r) => r.action)).toEqual(['create', 'error']);
+  });
+
+  it("la nuit deja saisie la veille bloque le matin, sans pouvoir etre remplacee depuis ce jour", () => {
+    const [r] = plan([line(slot('05:00', '12:00'), { dateKey: NEXT, onConflict: 'replace' })], { existing: [existing(night)] });
+    expect(r).toMatchObject({ action: 'conflict', canReplace: false, replaceIds: [] });
+    expect(r!.message).toContain('22:00-06:00 du 16/11');
+  });
+
+  it('la pointeuse de la nuit precedente est signalee', () => {
+    const [r] = plan([line(slot('05:00', '12:00'), { dateKey: NEXT })], {
+      punches: [{ employeeId: 'a', dateKey: DAY, start: night.start!, end: night.end! }],
+    });
+    expect(r!.warnings[0]).toContain('pointeuse (22:00-06:00)');
+  });
+});
+
 describe('perimetre du manager (service)', () => {
   const build = () => {
     const findMany = jest.fn().mockResolvedValue([]);
@@ -102,7 +150,7 @@ describe('perimetre du manager (service)', () => {
       timeManualEntry: { findMany, count: jest.fn().mockResolvedValue(0), aggregate: jest.fn().mockResolvedValue({ _sum: {} }), findUnique: jest.fn() },
       employee: { findFirst: jest.fn() },
     };
-    const calculation = { teamEmployeeIds: jest.fn().mockResolvedValue(['equipier']) };
+    const calculation = { teamEmployeeIds: jest.fn().mockResolvedValue(['equipier']), loadPunchSpans: jest.fn().mockResolvedValue([]) };
     return { service: new TimeEntryService(prisma as never, {} as never, {} as never, calculation as never), prisma, findMany };
   };
   const manager = new Set(['TEMPS_VALIDER']);

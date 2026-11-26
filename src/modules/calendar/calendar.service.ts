@@ -4,7 +4,9 @@ import { CreateCalendarDto } from './dto/create-calendar.dto';
 import { UpdateCalendarDto } from './dto/update-calendar.dto';
 import { CalendarWorkDayDto } from './dto/calendar-work-day.dto';
 import { ImportCalendarScheduleDto } from './dto/import-calendar-schedule.dto';
+import { ApplyCalendarToEmployeesDto } from './dto/apply-calendar-to-employees.dto';
 import { mergeScheduleDays } from './calendar-schedule-import';
+import { workDayError } from './calendar-hours';
 
 const WORK_DAYS_INCLUDE = {
   workDays: true,
@@ -23,25 +25,14 @@ export class CalendarService {
   private validateWorkDays(workDays?: CalendarWorkDayDto[]) {
     if (!workDays) return;
     for (const day of workDays) {
-      if (!day.IsEnabled) continue;
-      if (day.StartTime && day.EndTime && day.EndTime <= day.StartTime) {
-        throw new BadRequestException(
-          `${day.DayOfWeek} : l'heure de fin doit être après l'heure de début`,
-        );
-      }
-      if (day.BreakEnabled && day.BreakStartTime && day.BreakEndTime) {
-        if (day.BreakEndTime <= day.BreakStartTime) {
-          throw new BadRequestException(`${day.DayOfWeek} : la pause doit finir après avoir commencé`);
-        }
-        if (day.StartTime && day.BreakStartTime < day.StartTime) {
-          throw new BadRequestException(
-            `${day.DayOfWeek} : la pause ne peut pas commencer avant l'heure de début`,
-          );
-        }
-        if (day.EndTime && day.BreakEndTime > day.EndTime) {
-          throw new BadRequestException(`${day.DayOfWeek} : la pause ne peut pas finir après l'heure de fin`);
-        }
-      }
+      if (!day.IsEnabled || !day.StartTime || !day.EndTime) continue;
+      const minutes = (value: Date) => value.getUTCHours() * 60 + value.getUTCMinutes();
+      const rest =
+        day.BreakEnabled && day.BreakStartTime && day.BreakEndTime
+          ? { start: minutes(day.BreakStartTime), end: minutes(day.BreakEndTime) }
+          : null;
+      const error = workDayError(minutes(day.StartTime), minutes(day.EndTime), rest);
+      if (error) throw new BadRequestException(`${day.DayOfWeek} : ${error}`);
     }
   }
 
@@ -55,8 +46,17 @@ export class CalendarService {
     }
   }
 
-  // Un employe n'a jamais plus d'un calendrier dedie (pas de contrainte SQL,
-  // voir schema.prisma).
+  // Une categorie et un employe n'ont jamais plus d'un calendrier dedie (pas de
+  // contrainte SQL, voir schema.prisma).
+  private async assertCategoryFree(categoryId: string | null | undefined, exceptCalendarId?: string) {
+    if (!categoryId) return;
+    const taken = await this.prisma.calendar.findFirst({
+      where: { EmployeeCategoryId: categoryId, ...(exceptCalendarId ? { Id: { not: exceptCalendarId } } : {}) },
+      select: { Id: true },
+    });
+    if (taken) throw new BadRequestException('Cette catégorie a déjà un calendrier dédié');
+  }
+
   private async assertEmployeeFree(employeeId: string | null | undefined, exceptCalendarId?: string) {
     if (!employeeId) return;
     const taken = await this.prisma.calendar.findFirst({
@@ -69,6 +69,7 @@ export class CalendarService {
   async create(dto: CreateCalendarDto, createdBy: string) {
     this.validateWorkDays(dto.WorkDays);
     this.validateScope(dto);
+    await this.assertCategoryFree(dto.EmployeeCategoryId);
     await this.assertEmployeeFree(dto.EmployeeId);
     return this.prisma.$transaction(async (tx) => {
       // Un seul calendrier par defaut a la fois — sans ca, en creer un second
@@ -159,6 +160,7 @@ export class CalendarService {
       EmployeeCategoryId: dto.EmployeeCategoryId !== undefined ? dto.EmployeeCategoryId : existing.EmployeeCategoryId,
       EmployeeId: dto.EmployeeId !== undefined ? dto.EmployeeId : existing.EmployeeId,
     });
+    await this.assertCategoryFree(dto.EmployeeCategoryId, id);
     await this.assertEmployeeFree(dto.EmployeeId, id);
     return this.prisma.$transaction(async (tx) => {
       if (dto.IsDefault) {
@@ -235,6 +237,49 @@ export class CalendarService {
       },
       actorId,
     );
+  }
+
+  // Memes horaires pour plusieurs employes : le calendrier propre de chacun est
+  // cree, ou sa semaine remplacee s'il en a deja un. Tout ou rien.
+  async applyToEmployees(dto: ApplyCalendarToEmployeesDto, actorId: string) {
+    this.validateWorkDays(dto.WorkDays);
+    const wanted = [...new Set(dto.EmployeeIds.map((id) => id.toLowerCase()))];
+    const employees = await this.prisma.employee.findMany({
+      where: { Id: { in: wanted }, IsDeleted: false },
+      select: { Id: true, FullName: true },
+    });
+    if (employees.length !== wanted.length) throw new BadRequestException('Un employé de la sélection est introuvable');
+    const existing = await this.prisma.calendar.findMany({
+      where: { EmployeeId: { in: wanted } },
+      select: { Id: true, EmployeeId: true },
+    });
+    const owners = new Set(existing.map((c) => c.EmployeeId!.toLowerCase()));
+    const missing = employees.filter((e) => !owners.has(e.Id.toLowerCase()));
+    const ids = existing.map((c) => c.Id);
+
+    await this.prisma.$transaction(
+      async (tx) => {
+        if (ids.length) {
+          await tx.calendarWorkDay.deleteMany({ where: { CalendarId: { in: ids } } });
+          await tx.calendarWorkDay.createMany({
+            data: ids.flatMap((CalendarId) => dto.WorkDays.map((day) => ({ ...day, CalendarId }))),
+          });
+          await tx.calendar.updateMany({ where: { Id: { in: ids } }, data: { ModifiedBy: actorId, ModifiedAt: new Date() } });
+        }
+        for (const employee of missing) {
+          await tx.calendar.create({
+            data: {
+              Name: `Calendrier · ${employee.FullName}`.slice(0, 100),
+              EmployeeId: employee.Id,
+              CreatedBy: actorId,
+              workDays: { create: dto.WorkDays.map((day) => ({ ...day })) },
+            },
+          });
+        }
+      },
+      { timeout: 120_000 },
+    );
+    return { Created: missing.length, Updated: existing.length };
   }
 
   async remove(id: string) {
