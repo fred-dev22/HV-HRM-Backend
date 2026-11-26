@@ -646,6 +646,32 @@ model MailSettings {
   ModifiedAt DateTime? @db.DateTime2
 }
 
+/// Stockage des fichiers (justificatifs, pieces jointes) : dossier du serveur OU
+/// SharePoint via Microsoft Graph. Table singleton configuree dans l'application
+/// (Parametres > Stockage), reservee au compte administrateur de lancement ; sans
+/// ligne, aucun fichier ne peut etre envoye et une bande d'alerte s'affiche.
+/// Les identifiants Graph sont chiffres (AES-256-GCM), jamais renvoyes en clair.
+/// Les deux jeux de reglages peuvent coexister : Provider designe celui qui recoit
+/// les nouveaux fichiers, l'autre reste lisible pour les fichiers deja deposes.
+model StorageSettings {
+  Id       String @id @default(uuid()) @db.UniqueIdentifier
+  // Local | Graph
+  Provider String @db.NVarChar(10)
+
+  // Dossier du serveur (chemin absolu, ex. D:\hrm-files)
+  LocalPath String? @db.NVarChar(500)
+
+  GraphTenantIdEnc     String? @db.NVarChar(1000)
+  GraphClientIdEnc     String? @db.NVarChar(1000)
+  GraphClientSecretEnc String? @db.NVarChar(1000)
+  GraphSiteHost        String? @db.NVarChar(200)
+  GraphSitePath        String? @db.NVarChar(200)
+  GraphUploadPath      String? @db.NVarChar(300)
+
+  ModifiedBy String?   @db.UniqueIdentifier
+  ModifiedAt DateTime? @db.DateTime2
+}
+
 /// Parametres globaux de l'entreprise. Table singleton : une seule ligne,
 /// jamais inseree une deuxieme fois.
 model CompanySettings {
@@ -1283,6 +1309,10 @@ model Attachment {
   FileUrl    String @db.NVarChar(500)
   FileSize   Int
   MimeType   String @db.NVarChar(100)
+  // Ou le fichier est stocke : Local (dossier du serveur, FileUrl = nom du fichier
+  // dans ce dossier) ou SharePoint (FileUrl = lien SharePoint). Null = SharePoint
+  // (fichiers deposes avant l'ecran Parametres > Stockage).
+  StorageProvider String? @db.NVarChar(10)
 
   CreatedBy String   @db.UniqueIdentifier
   CreatedAt DateTime @default(now()) @db.DateTime2

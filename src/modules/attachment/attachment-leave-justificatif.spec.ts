@@ -32,7 +32,8 @@ function build(leave: {
     },
   };
   const sharePoint = { uploadFile: jest.fn().mockResolvedValue({ url: 'https://sp/x', size: 10 }) };
-  return { service: new AttachmentService(prisma as any, sharePoint as any), prisma, sharePoint };
+  const storage = { resolve: jest.fn().mockResolvedValue({ provider: 'Graph', localPath: null, graph: { tenantId: 't' } }) };
+  return { service: new AttachmentService(prisma as any, sharePoint as any, {} as any, storage as any), prisma, sharePoint };
 }
 
 describe('AttachmentService : justificatif de demande de conge', () => {

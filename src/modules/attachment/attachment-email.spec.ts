@@ -10,8 +10,9 @@ function build(
   download: (url: string) => Promise<Buffer>,
 ) {
   const prisma = { attachment: { findMany: jest.fn().mockResolvedValue(rows) } };
-  const sharePoint = { downloadFile: jest.fn(download) };
-  return { service: new AttachmentService(prisma as any, sharePoint as any), prisma, sharePoint };
+  const sharePoint = { downloadFile: jest.fn((_cfg: unknown, url: string) => download(url)) };
+  const storage = { resolve: jest.fn().mockResolvedValue({ provider: 'Graph', localPath: null, graph: { tenantId: 't' } }) };
+  return { service: new AttachmentService(prisma as any, sharePoint as any, {} as any, storage as any), prisma, sharePoint };
 }
 
 const row = (name: string, size: number) => ({
@@ -77,7 +78,7 @@ describe('AttachmentService.loadForEmail', () => {
 
   it('ne leve jamais, meme si la lecture en base echoue', async () => {
     const prisma = { attachment: { findMany: jest.fn().mockRejectedValue(new Error('base indisponible')) } };
-    const service = new AttachmentService(prisma as any, {} as any);
+    const service = new AttachmentService(prisma as any, {} as any, {} as any, {} as any);
     await expect(service.loadForEmail('LeaveRequest', 'req')).resolves.toEqual({ files: [], skipped: [] });
   });
 

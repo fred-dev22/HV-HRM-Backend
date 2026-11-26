@@ -194,7 +194,7 @@ export class RecruitmentPublicService {
     }
 
     const authorId = await this.portalAuthorId();
-    const uploaded = await this.attachments.uploadToSharePoint(cv as Express.Multer.File);
+    const uploaded = await this.attachments.store(cv as Express.Multer.File);
 
     const app = await withReferenceCodeRetry(() =>
       this.prisma.$transaction(async (tx) => {
@@ -260,7 +260,7 @@ export class RecruitmentPublicService {
     }
 
     const authorId = await this.portalAuthorId();
-    const uploaded = await this.attachments.uploadToSharePoint(cv as Express.Multer.File);
+    const uploaded = await this.attachments.store(cv as Express.Multer.File);
 
     const app = await withReferenceCodeRetry(() =>
       this.prisma.$transaction(async (tx) => {

@@ -2,7 +2,7 @@ import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { SystemAdminGuard, isSystemAdminUser } from './system-admin.guard';
 
 const ctx = (user: any) => ({ switchToHttp: () => ({ getRequest: () => ({ user }) }) }) as any;
-const prismaWith = (row: any) => ({ user: { findUnique: jest.fn().mockResolvedValue(row) } }) as any;
+const prismaWith = (row: any) => ({ user: { findFirst: jest.fn().mockResolvedValue(row) } }) as any;
 const admin = { IsActive: true, employee: { IsSystem: true, IsDeleted: false, Status: 'Active' } };
 
 describe('SystemAdminGuard : compte administrateur de lancement uniquement', () => {

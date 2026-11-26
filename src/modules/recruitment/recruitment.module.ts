@@ -44,7 +44,7 @@ import { DistributionRetrySchedulerService } from './distribution/distribution-r
 // Module Recrutement (branche dev-recrutement-module) — un seul module qui
 // regroupe toutes les sous-entites du domaine, cablees sur les memes
 // services d'effets de bord (notifications, emails, temps reel) via
-// RecruitmentNotifyService. AttachmentModule fournit SharePointService pour
+// RecruitmentNotifyService. AttachmentModule fournit AttachmentService pour
 // le depot de CV ; EmployeeModule fournit EmployeeService pour la conversion
 // candidat -> employe.
 @Module({

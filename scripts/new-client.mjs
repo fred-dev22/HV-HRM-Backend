@@ -242,7 +242,7 @@ Fichier genere par \`scripts/new-client.mjs\` le ${new Date().toISOString().slic
 1. Une base SQL Server **vide**, et un login SQL \`db_owner\` sur cette base.
 2. Node.js 20 ou plus sur le serveur, et un mode d'hebergement (IIS + iisnode, ou service Windows derriere un reverse proxy).
 3. Une adresse publique${c.domain ? ` (${c.domain})` : ''} avec certificat HTTPS, qui sert le frontend et transmet \`/api\` au backend.
-4. Pour les emails : une boite d'envoi Microsoft 365 (application Microsoft Entra avec la permission \`Mail.Send\`) OU un serveur SMTP du nom de domaine du client. Ils se saisissent dans l'application (engrenage de la barre noire > Messagerie), pas dans le \`.env\`. Pour les pieces jointes : \`Sites.ReadWrite.All\` et un site SharePoint (facultatif).
+4. Pour les emails : une boite d'envoi Microsoft 365 (application Microsoft Entra avec la permission \`Mail.Send\`) OU un serveur SMTP du nom de domaine du client. Ils se saisissent dans l'application (engrenage de la barre noire > Messagerie), pas dans le \`.env\`. Pour les pieces jointes : un dossier du serveur, hors du dossier de l'application et sauvegarde, OU un site SharePoint (permission \`Sites.ReadWrite.All\`).
 
 ## 2. Base de donnees
 
@@ -258,7 +258,7 @@ Le compte administrateur est cree avec le mot de passe de \`ADMIN-CREDENTIALS.tx
 1. Sur un poste de build Windows (une seule fois, le meme paquet sert tous les clients) : \`npm run build:iis\` produit \`dist/standalone/\`.
 2. Copier \`dist/standalone/\` sur le serveur.
 3. Copier \`deploy/${c.slug}/.env.generated\` sur le serveur sous le nom \`.env\`, dans le repertoire de travail du processus, et le dossier \`deploy/${c.slug}/brand/\` (client.json + logo) a cote.
-4. Renseigner dans \`.env\` : \`DATABASE_URL\` et, si utilise, les variables \`GRAPH_SHAREPOINT_*\`. L'envoi des emails ne se configure PAS ici (voir la section 5).
+4. Renseigner dans \`.env\` : \`DATABASE_URL\`. L'envoi des emails et le stockage des fichiers ne se configurent PAS ici (voir la section 5).
 5. Demarrer le backend (apres la base de donnees).
 
 ## 4. Frontend
@@ -278,7 +278,8 @@ Le script affiche la marque et les modules lus sur l'instance, puis controle que
 1. Ouvrir ${origin} : le nom, le logo et la couleur sont ceux de ${c.short}.
 2. Se connecter avec le compte administrateur et changer le mot de passe.
 3. Ouvrir l'engrenage de la barre noire > Messagerie : choisir Microsoft Graph ou SMTP, enregistrer, puis envoyer un email de test (tant que ce n'est pas fait, aucun email ne part et une bande d'alerte s'affiche).
-4. Creer un employe avec un compte : l'email d'accueil doit arriver, au nom de ${c.short}.
+4. Ouvrir l'engrenage de la barre noire > Stockage : choisir un dossier du serveur (le compte qui execute l'application doit pouvoir y ecrire) ou SharePoint, enregistrer, puis tester (tant que ce n'est pas fait, aucun fichier ne peut etre envoye).
+5. Creer un employe avec un compte : l'email d'accueil doit arriver, au nom de ${c.short}.
 
 ## 6. Activer ou couper un module plus tard
 

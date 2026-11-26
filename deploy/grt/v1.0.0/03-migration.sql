@@ -1,12 +1,14 @@
 -- GRT : script de migration unique (a jouer apres 01-schema.sql et 02-seed.sql, avant de demarrer
--- le nouveau backend). Il regroupe trois evolutions, dans cet ordre :
+-- le nouveau backend). Il regroupe cinq evolutions, dans cet ordre :
 --   1) Messagerie : table MailSettings (configuration des emails dans l'application, Graph ou SMTP).
 --   2) Regime de conge annuel : Employee.LeaveRegime (Calendar | Working) et
 --      LeaveType.AppliesToLeaveRegime, pour les deux types de conge annuel (32 j calendaires,
 --      26 j ouvrables) reserves chacun a son regime.
 --   3) Interimaire du validateur direct : Employee.ValidatorInterimId.
+--   4) Temps de travail : heures supplementaires calculees a la semaine (reglage overtime_method).
+--   5) Stockage des fichiers : table StorageSettings et colonne Attachment.StorageProvider.
 -- Chaque partie est transactionnelle et rejouable sans effet : le fichier peut etre relance sans risque.
--- Ne contient aucune donnee : aucun solde, aucun employe, aucun type de conge n'est modifie.
+-- Seule donnee modifiee : le reglage overtime_method. Aucun solde, employe ou type de conge n'est touche.
 GO
 -- Configuration de l'envoi d'emails depuis l'application (Microsoft Graph OU SMTP
 -- avec le nom de domaine du client), dans l'espace Parametres de l'application
@@ -162,6 +164,51 @@ UPDATE [dbo].[TimeSetting] SET [Value] = 1 WHERE [Key] = N'overtime_method' AND 
 
 COMMIT TRAN;
 PRINT N'Script (calcul hebdomadaire uniquement) applique.';
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRAN;
+    THROW;
+END CATCH;
+GO
+
+-- ============================================================================
+-- Stockage des fichiers configurable dans l'application (engrenage de la barre
+-- noire > Stockage, compte administrateur) : table StorageSettings et colonne
+-- Attachment.StorageProvider. Les GRAPH_SHAREPOINT_* du .env ne sont PLUS lues.
+-- Rejouable sans effet. Aucune donnee existante n'est modifiee.
+-- ============================================================================
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+BEGIN TRY
+
+BEGIN TRAN;
+
+IF OBJECT_ID(N'dbo.StorageSettings', N'U') IS NULL
+BEGIN
+    CREATE TABLE [dbo].[StorageSettings] (
+        [Id] UNIQUEIDENTIFIER NOT NULL CONSTRAINT [StorageSettings_Id_df] DEFAULT NEWID(),
+        [Provider] NVARCHAR(10) NOT NULL,
+        [LocalPath] NVARCHAR(500) NULL,
+        [GraphTenantIdEnc] NVARCHAR(1000) NULL,
+        [GraphClientIdEnc] NVARCHAR(1000) NULL,
+        [GraphClientSecretEnc] NVARCHAR(1000) NULL,
+        [GraphSiteHost] NVARCHAR(200) NULL,
+        [GraphSitePath] NVARCHAR(200) NULL,
+        [GraphUploadPath] NVARCHAR(300) NULL,
+        [ModifiedBy] UNIQUEIDENTIFIER NULL,
+        [ModifiedAt] DATETIME2 NULL,
+        CONSTRAINT [StorageSettings_pkey] PRIMARY KEY CLUSTERED ([Id])
+    );
+END;
+
+IF COL_LENGTH('dbo.Attachment', 'StorageProvider') IS NULL
+BEGIN
+    ALTER TABLE [dbo].[Attachment] ADD [StorageProvider] NVARCHAR(10) NULL;
+END;
+
+COMMIT TRAN;
+PRINT N'Script (stockage des fichiers) applique.';
 END TRY
 BEGIN CATCH
     IF @@TRANCOUNT > 0 ROLLBACK TRAN;

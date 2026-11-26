@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { Prisma } from '../../../../prisma/generated/client';
-import { SharePointService } from '../../attachment/sharepoint.service';
+import { AttachmentService } from '../../attachment/attachment.service';
 import { RECRUITMENT_UPLOAD, safeBaseName } from './recruitment-upload.util';
 
 type TxClient = Prisma.TransactionClient | PrismaService;
@@ -39,23 +39,25 @@ export interface UploadedFileRef {
   url: string;
   size: number;
   mimeType: string;
+  storageProvider: string;
 }
 
-// Depot reel des CV / pieces jointes du module Recrutement. On passe par
-// SharePointService directement (pas AttachmentService, dont le controle
-// d'acces suppose un employe proprietaire : un candidat n'en est pas un et
-// les routes publiques n'ont pas de demandeur). Les lignes ecrites sont des
-// Attachment polymorphes (EntityType 'RecruitmentApplication' | 'JobOffer',
-// colonne libre sans FK ni contrainte).
+// Depot reel des CV / pieces jointes du module Recrutement. Le fichier va au meme
+// endroit que les justificatifs (AttachmentService.storeFile : dossier du serveur
+// ou SharePoint), mais sans passer par AttachmentService.upload, dont le controle
+// d'acces suppose un employe proprietaire : un candidat n'en est pas un et les
+// routes publiques n'ont pas de demandeur. Les lignes ecrites sont des Attachment
+// polymorphes (EntityType 'RecruitmentApplication' | 'JobOffer', colonne libre
+// sans FK ni contrainte).
 @Injectable()
 export class RecruitmentAttachmentService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly sharePoint: SharePointService,
+    private readonly files: AttachmentService,
   ) {}
 
   // Defense en profondeur : le multer limits.fileSize a deja coupe le flux,
-  // on revalide la taille cote service avant l'appel SharePoint.
+  // on revalide la taille cote service avant le depot.
   private assertWithinLimit(file: Express.Multer.File): void {
     const size = file.size ?? file.buffer?.length ?? 0;
     if (!file.buffer || size <= 0) {
@@ -66,14 +68,14 @@ export class RecruitmentAttachmentService {
     }
   }
 
-  // Televerse le fichier vers SharePoint. Toute panne (config Graph, tenant
-  // instable...) -> 503, rien n'est persiste par l'appelant.
-  async uploadToSharePoint(file: Express.Multer.File): Promise<UploadedFileRef> {
+  // Depose le fichier. Toute panne (stockage non configure ou injoignable) -> 503,
+  // rien n'est persiste par l'appelant.
+  async store(file: Express.Multer.File): Promise<UploadedFileRef> {
     this.assertWithinLimit(file);
     const fileName = safeBaseName(file.originalname);
     try {
-      const { url, size } = await this.sharePoint.uploadFile(fileName, file.buffer, file.mimetype);
-      return { fileName, url, size, mimeType: file.mimetype };
+      const { url, size, provider } = await this.files.storeFile(fileName, file.buffer, file.mimetype);
+      return { fileName, url, size, mimeType: file.mimetype, storageProvider: provider };
     } catch {
       throw new ServiceUnavailableException(
         'Le depot du fichier a echoue, merci de reessayer dans quelques minutes.',
@@ -93,6 +95,7 @@ export class RecruitmentAttachmentService {
       EntityId: entityId,
       FileName: uploaded.fileName,
       FileUrl: uploaded.url,
+      StorageProvider: uploaded.storageProvider,
       FileSize: uploaded.size,
       MimeType: uploaded.mimeType,
       CreatedBy: createdBy,
@@ -108,7 +111,7 @@ export class RecruitmentAttachmentService {
     createdBy: string,
     client: TxClient = this.prisma,
   ): Promise<RecruitmentDocumentShape> {
-    const uploaded = await this.uploadToSharePoint(file);
+    const uploaded = await this.store(file);
     const row = await client.attachment.create({
       data: this.attachmentData(entityType, entityId, uploaded, createdBy),
     });
@@ -129,7 +132,7 @@ export class RecruitmentAttachmentService {
 
   // Charge la piece jointe puis refuse tout id qui n'appartient pas au couple
   // (entityType, entityId) de la route -> empeche le sondage d'ids d'autres
-  // modules. Le fichier SharePoint n'est pas supprime (meme convention
+  // modules. Le fichier depose n'est pas supprime (meme convention
   // deliberee que AttachmentService.remove). Renvoie la ligne supprimee pour
   // que l'appelant puisse reagir (ex. remettre CvFileName a null).
   async removeFor(

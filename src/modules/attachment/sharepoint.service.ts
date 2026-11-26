@@ -1,11 +1,19 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { mkdir, writeFile } from 'fs/promises';
-import { join } from 'path';
 
 // Upload de fichiers vers SharePoint via Microsoft Graph — meme pattern que
 // mail.service.ts : flux client-credentials pur fetch, pas de SDK
 // @azure/identity ni @microsoft/microsoft-graph-client.
+// Configuration SharePoint en clair, telle que fournie par StorageSettingsService.
+export interface GraphStorageConfig {
+  tenantId: string;
+  clientId: string;
+  clientSecret: string;
+  siteHost: string;
+  sitePath: string;
+  uploadPath: string;
+}
+
 interface GraphTokenResponse {
   access_token: string;
   expires_in: number;
@@ -26,40 +34,30 @@ interface GraphDriveItem {
 }
 
 @Injectable()
-export class SharePointService implements OnModuleInit {
+export class SharePointService {
   private readonly logger = new Logger(SharePointService.name);
 
-  // Avertit au demarrage si SharePoint n'est pas configure : les
-  // justificatifs (et les types de conge qui les exigent) en dependent.
-  onModuleInit() {
-    const required = [
-      'GRAPH_SHAREPOINT_TENANT_ID',
-      'GRAPH_SHAREPOINT_CLIENT_ID',
-      'GRAPH_SHAREPOINT_CLIENT_SECRET',
-      'GRAPH_SHAREPOINT_SITE_HOST',
-      'GRAPH_SHAREPOINT_SITE_PATH',
-      'GRAPH_SHAREPOINT_UPLOAD_PATH',
-    ].filter((name) => !process.env[name]);
-    if (required.length > 0) {
-      this.logger.warn(
-        `SharePoint non configure (variables manquantes : ${required.join(', ')}) : le televersement des justificatifs echouera.`,
-      );
-    }
-  }
-  private cachedToken: { value: string; expiresAt: number } | null = null;
-  private cachedDrive: { siteId: string; driveId: string } | null = null;
+  // La configuration vient de l'ecran Parametres > Stockage (StorageSettingsService),
+  // jamais des variables d'environnement. Les jetons et identifiants de site mis en
+  // cache sont lies a la configuration qui les a produits : une configuration
+  // modifiee en invalide automatiquement le cache.
+  private cachedToken: { sig: string; value: string; expiresAt: number } | null = null;
+  private cachedDrive: { sig: string; siteId: string; driveId: string } | null = null;
 
-  private async getAccessToken(): Promise<string> {
-    if (this.cachedToken && this.cachedToken.expiresAt > Date.now()) {
+  private static sig(cfg: GraphStorageConfig): string {
+    return [cfg.tenantId, cfg.clientId, cfg.clientSecret, cfg.siteHost, cfg.sitePath].join('|');
+  }
+
+  private async getAccessToken(cfg: GraphStorageConfig): Promise<string> {
+    const sig = SharePointService.sig(cfg);
+    if (this.cachedToken && this.cachedToken.sig === sig && this.cachedToken.expiresAt > Date.now()) {
       return this.cachedToken.value;
     }
-    const tenantId = process.env.GRAPH_SHAREPOINT_TENANT_ID;
-    const clientId = process.env.GRAPH_SHAREPOINT_CLIENT_ID;
-    const clientSecret = process.env.GRAPH_SHAREPOINT_CLIENT_SECRET;
+    const { tenantId, clientId, clientSecret } = cfg;
     const body = new URLSearchParams({
       grant_type: 'client_credentials',
-      client_id: clientId ?? '',
-      client_secret: clientSecret ?? '',
+      client_id: clientId,
+      client_secret: clientSecret,
       scope: 'https://graph.microsoft.com/.default',
     });
     const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
@@ -73,18 +71,19 @@ export class SharePointService implements OnModuleInit {
     const data = (await res.json()) as GraphTokenResponse;
     // Marge de 60s avant l'expiration reelle pour eviter d'utiliser un jeton
     // perime pile au moment de l'upload.
-    this.cachedToken = { value: data.access_token, expiresAt: Date.now() + (data.expires_in - 60) * 1000 };
+    this.cachedToken = { sig, value: data.access_token, expiresAt: Date.now() + (data.expires_in - 60) * 1000 };
     return this.cachedToken.value;
   }
 
   // Resout le site puis son drive documentaire par defaut une seule fois —
   // ces ids sont stables pour un site donne, pas besoin de les redemander a
   // chaque upload.
-  private async resolveDrive(): Promise<{ siteId: string; driveId: string }> {
-    if (this.cachedDrive) return this.cachedDrive;
-    const token = await this.getAccessToken();
-    const host = process.env.GRAPH_SHAREPOINT_SITE_HOST;
-    const sitePath = process.env.GRAPH_SHAREPOINT_SITE_PATH;
+  private async resolveDrive(cfg: GraphStorageConfig): Promise<{ siteId: string; driveId: string }> {
+    const sig = SharePointService.sig(cfg);
+    if (this.cachedDrive && this.cachedDrive.sig === sig) return this.cachedDrive;
+    const token = await this.getAccessToken(cfg);
+    const host = cfg.siteHost;
+    const sitePath = cfg.sitePath;
 
     const siteRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${host}:${sitePath}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -102,53 +101,22 @@ export class SharePointService implements OnModuleInit {
     }
     const drive = (await driveRes.json()) as GraphDrive;
 
-    this.cachedDrive = { siteId: site.id, driveId: drive.id };
+    this.cachedDrive = { sig, siteId: site.id, driveId: drive.id };
     return this.cachedDrive;
   }
 
-  private isConfigured(): boolean {
-    return !!(
-      process.env.GRAPH_SHAREPOINT_TENANT_ID &&
-      process.env.GRAPH_SHAREPOINT_CLIENT_ID &&
-      process.env.GRAPH_SHAREPOINT_CLIENT_SECRET &&
-      process.env.GRAPH_SHAREPOINT_SITE_HOST &&
-      process.env.GRAPH_SHAREPOINT_SITE_PATH
-    );
-  }
-
-  // Depot local de secours (dossier /uploads a la racine du backend, servi
-  // par UploadsController) quand SharePoint n'est pas configure — evite que
-  // TOUT depot de fichier (CV candidat, piece jointe RH...) echoue purement
-  // et simplement sur une instance ou le tenant Graph/SharePoint du client
-  // n'a pas encore ete mis en place (cas HV au 15/09 : GRAPH_SHAREPOINT_*
-  // vides). Meme convention de nommage que l'upload SharePoint (prefixe
-  // UUID court) pour rester coherent et eviter les collisions.
-  private async uploadFileLocally(
-    originalName: string,
-    buffer: Buffer,
-    mimeType: string,
-  ): Promise<{ url: string; size: number }> {
-    this.logger.warn(
-      `SharePoint non configure (GRAPH_SHAREPOINT_*) : "${originalName}" (${mimeType}) enregistre localement dans /uploads au lieu de SharePoint.`,
-    );
-    const safeName = `${randomUUID().slice(0, 8)}-${originalName}`.replace(/[#%{}\\~[\]/]/g, '_');
-    const dir = join(process.cwd(), 'uploads');
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, safeName), buffer);
-    const base = (process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT ?? 3000}/api`).replace(/\/$/, '');
-    return { url: `${base}/uploads/${encodeURIComponent(safeName)}`, size: buffer.length };
+  // Verifie la configuration (jeton, site, bibliotheque) sans rien ecrire : sert au bouton de test.
+  async verify(cfg: GraphStorageConfig): Promise<void> {
+    await this.resolveDrive(cfg);
   }
 
   // Prefixe le nom de fichier par un UUID court pour eviter toute collision
   // entre deux uploads du meme fichier (deux notes de frais avec un "photo.jpg"
   // chacune, par ex.) — le nom d'origine reste lisible dans SharePoint.
-  async uploadFile(originalName: string, buffer: Buffer, mimeType: string): Promise<{ url: string; size: number }> {
-    if (!this.isConfigured()) {
-      return this.uploadFileLocally(originalName, buffer, mimeType);
-    }
-    const { siteId, driveId } = await this.resolveDrive();
-    const token = await this.getAccessToken();
-    const uploadPath = process.env.GRAPH_SHAREPOINT_UPLOAD_PATH ?? 'Shared Documents';
+  async uploadFile(cfg: GraphStorageConfig, originalName: string, buffer: Buffer, mimeType: string): Promise<{ url: string; size: number }> {
+    const { siteId, driveId } = await this.resolveDrive(cfg);
+    const token = await this.getAccessToken(cfg);
+    const uploadPath = cfg.uploadPath;
     const safeName = `${randomUUID().slice(0, 8)}-${originalName}`.replace(/[#%{}\\~[\]]/g, '_');
     const encodedPath = `${uploadPath}/${safeName}`
       .split('/')
@@ -175,14 +143,14 @@ export class SharePointService implements OnModuleInit {
   // Relit un fichier depose par uploadFile() (ex: pour le joindre a un email).
   // On ne stocke que le webUrl : le nom stocke sur SharePoint (uuid court +
   // nom d'origine) en est le dernier segment, et le fichier vit sous
-  // GRAPH_SHAREPOINT_UPLOAD_PATH, exactement le chemin utilise a l'envoi.
+  // le dossier de depot configure, exactement le chemin utilise a l'envoi.
   // Graph repond par une redirection vers une URL de telechargement deja
   // signee, suivie par fetch (l'en-tete Authorization n'est pas transmis a un
   // autre domaine).
-  async downloadFile(fileUrl: string): Promise<Buffer> {
-    const { siteId, driveId } = await this.resolveDrive();
-    const token = await this.getAccessToken();
-    const uploadPath = process.env.GRAPH_SHAREPOINT_UPLOAD_PATH ?? 'Shared Documents';
+  async downloadFile(cfg: GraphStorageConfig, fileUrl: string): Promise<Buffer> {
+    const { siteId, driveId } = await this.resolveDrive(cfg);
+    const token = await this.getAccessToken(cfg);
+    const uploadPath = cfg.uploadPath;
     const storedName = decodeURIComponent(new URL(fileUrl).pathname.split('/').pop() ?? '');
     if (!storedName) {
       throw new Error(`Nom de fichier introuvable dans l'URL SharePoint : ${fileUrl}`);

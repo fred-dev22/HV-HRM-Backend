@@ -1,4 +1,5 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AttachmentService } from './attachment.service';
 import { UploadAttachmentDto, ATTACHMENT_ENTITY_TYPES, type AttachmentEntityType } from './dto/upload-attachment.dto';
@@ -41,6 +42,24 @@ export class AttachmentController {
       throw new BadRequestException("Le type d'entité indiqué est invalide");
     }
     return this.service.findByEntity(entityType, entityId, employeeId, permissions);
+  }
+
+  // Sert le contenu d'une piece jointe apres controle d'acces : indispensable pour
+  // les fichiers du dossier du serveur (le navigateur ne peut pas les ouvrir par
+  // lien direct). Le fichier est affiche dans le navigateur quand il sait le lire.
+  @Get(':id/download')
+  async download(
+    @Param('id') id: string,
+    @CurrentUser('employeeId') employeeId: string,
+    @CurrentPermissions() permissions: Set<string>,
+    @Res() res: Response,
+  ) {
+    const { buffer, fileName, mimeType } = await this.service.download(id, employeeId, permissions);
+    res.setHeader('Content-Type', mimeType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.end(buffer);
   }
 
   @Delete(':id')

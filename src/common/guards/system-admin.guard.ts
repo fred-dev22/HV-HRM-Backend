@@ -8,7 +8,11 @@ import { PrismaService } from '../../prisma/prisma.service';
 // PermissionGuard, pour qu'une desactivation prenne effet immediatement.
 export async function isSystemAdminUser(prisma: PrismaService, userId: string | undefined): Promise<boolean> {
   if (!userId) return false;
-  const user = await prisma.user.findUnique({
+  // findFirst et non findUnique : Prisma regroupe les findUnique simultanes en une
+  // seule requete, et sous charge (le frontend lance plusieurs appels d'etat en meme
+  // temps) cela a renvoye "pas administrateur" a tort, ce qui cachait le bouton de
+  // configuration et renvoyait l'administrateur hors des Parametres.
+  const user = await prisma.user.findFirst({
     where: { Id: userId },
     select: { IsActive: true, employee: { select: { IsSystem: true, IsDeleted: true, Status: true } } },
   });

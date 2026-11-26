@@ -78,10 +78,10 @@ export class ApplicationService {
 
   async create(dto: CreateApplicationDto, employeeId: string, cv?: Express.Multer.File) {
     const jobOfferTitle = await this.resolveOfferTitle(dto.JobOfferId);
-    // Upload SharePoint AVANT la transaction : un appel reseau long ne doit
+    // Depot du fichier AVANT la transaction : un appel reseau long ne doit
     // pas maintenir une transaction DB ouverte. Si l'upload echoue (503),
     // aucune candidature n'est creee.
-    const uploaded = cv ? await this.attachments.uploadToSharePoint(cv) : null;
+    const uploaded = cv ? await this.attachments.store(cv) : null;
     const row = await withReferenceCodeRetry(() =>
       this.prisma.$transaction(async (tx) => {
         const created = await tx.recruitmentApplication.create({
@@ -135,7 +135,7 @@ export class ApplicationService {
     if (!file) {
       throw new BadRequestException('Le fichier est obligatoire.');
     }
-    const uploaded = await this.attachments.uploadToSharePoint(file);
+    const uploaded = await this.attachments.store(file);
     const doc = await this.prisma.$transaction(async (tx) => {
       const created = await tx.attachment.create({
         data: this.attachments.attachmentData('RecruitmentApplication', id, uploaded, employeeId),
